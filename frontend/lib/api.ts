@@ -462,6 +462,38 @@ export async function deleteAnthropicConnection(): Promise<AnthropicConnection> 
   return readJson(await fetch("/api/settings/anthropic", { method: "DELETE" }));
 }
 
+export type CoachEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type CoachModelChoice = { model: string; effort: CoachEffort };
+
+/** Coach Cade's model setting: the choice, what is in force, and what can be chosen. */
+export type CoachModelSettings = {
+  saved: CoachModelChoice | null;
+  effective: CoachModelChoice;
+  tested: CoachModelChoice;
+  models: Array<{ id: string; displayName: string; tested: boolean; efforts: CoachEffort[] }>;
+  /** Why only a short list is offered: no key saved, or the list couldn't be loaded. */
+  fallback: "no_key" | "unavailable" | null;
+};
+
+export async function fetchCoachModel(): Promise<CoachModelSettings> {
+  return readJson(await fetch("/api/settings/coach-model"));
+}
+
+export async function saveCoachModel(choice: CoachModelChoice): Promise<CoachModelSettings> {
+  return readJson(
+    await fetch("/api/settings/coach-model", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(choice),
+    }),
+  );
+}
+
+export async function resetCoachModel(): Promise<CoachModelSettings> {
+  return readJson(await fetch("/api/settings/coach-model", { method: "DELETE" }));
+}
+
 export async function fetchThread(
   weekSessionId?: string,
 ): Promise<{ messages: ThreadMessage[]; artifacts: ThreadArtifact[] }> {

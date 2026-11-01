@@ -66,7 +66,7 @@ export type CreateAppOptions = {
    * stub remains the CI default.
    */
   llmPort?: LlmPort;
-  /** Injected fetch for the default Anthropic LlmPort (tests). */
+  /** Injected fetch for the default Anthropic LlmPort and the model listing (tests). */
   llmFetch?: typeof globalThis.fetch;
   /** LLM call log sink (tests inject a failing one). Defaults to Postgres. */
   llmCallRecorder?: LlmCallRecorder;
@@ -143,7 +143,14 @@ export function createApp(options?: CreateAppOptions): Hono {
   app.route("/", healthRoutes);
   app.route("/", disclaimerRoutes);
   app.route("/", privacyRoutes);
-  app.route("/", createSettingsRoutes({ dataProtectionKey: options?.dataProtectionKey, sources }));
+  app.route(
+    "/",
+    createSettingsRoutes({
+      dataProtectionKey: options?.dataProtectionKey,
+      sources,
+      anthropicFetch: options?.llmFetch,
+    }),
+  );
   app.route("/", createTempoRoutes({ tempoPort }));
   app.route("/", createThreadRoutes({ clock }));
   app.route("/", createLlmCallLogRoutes({ recorder: llmCallRecorder }));

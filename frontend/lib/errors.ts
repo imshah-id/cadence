@@ -81,6 +81,8 @@ const BY_CODE: Record<string, string> = {
     "Couldn’t save that securely. Ask whoever set up the app to check the server settings.",
   goal_required: "Tell Coach Cade what you are training for.",
   schedule_required: "Tell Coach Cade which days you can run.",
+  unknown_model: "That model isn’t available with your key. Choose another one.",
+  effort_not_supported: "That model can’t think at that level. Choose another level.",
 };
 
 function isValidationCode(code: string): boolean {
