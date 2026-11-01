@@ -6,9 +6,13 @@ export {
   type AnthropicLlmPortOptions,
 } from "./anthropic.js";
 export {
+  resolveCoachModel,
+  TESTED_COACH_MODEL,
+  type CoachModel,
+} from "./coachModel.js";
+export {
   ANTHROPIC_EFFORT_LEVELS,
-  DEFAULT_ANTHROPIC_EFFORT,
-  resolveAnthropicEffort,
+  parseAnthropicEffort,
   type AnthropicEffort,
 } from "./effort.js";
 export {

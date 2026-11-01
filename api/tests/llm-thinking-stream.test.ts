@@ -9,8 +9,10 @@ import {
   LlmHttpError,
   LlmSchemaError,
   LlmTransportError,
-  resolveAnthropicEffort,
+  parseAnthropicEffort,
   resolveAnthropicTimeoutMs,
+  TESTED_COACH_MODEL,
+  type CoachModel,
   type LlmPort,
 } from "../src/llm/index.js";
 import { migrate } from "../src/migrate.js";
@@ -70,7 +72,7 @@ type Flow = {
   name: string;
   tool: string;
   operation: string;
-  call: (port: LlmPort, callId: string) => Promise<unknown>;
+  call: (port: LlmPort, callId: string, coachModel?: CoachModel) => Promise<unknown>;
   okInput: () => unknown;
 };
 
@@ -79,15 +81,16 @@ const FLOWS: Flow[] = [
     name: "weekly reply",
     tool: WEEKLY_TOOL,
     operation: "weekly_reply",
-    call: (port, callId) => port.generateWeeklyReply(samplePacket(), { callId }),
+    call: (port, callId, coachModel) =>
+      port.generateWeeklyReply(samplePacket(), { callId, coachModel }),
     okInput: () => buildStubWeeklyReply(samplePacket()),
   },
   {
     name: "mid-week chat",
     tool: MIDWEEK_TOOL,
     operation: "mid_week_chat",
-    call: (port, callId) =>
-      port.generateMidWeekChatReply(samplePacket(), { callId }),
+    call: (port, callId, coachModel) =>
+      port.generateMidWeekChatReply(samplePacket(), { callId, coachModel }),
     okInput: () => buildStubMidWeekChatReply(samplePacket()),
   },
 ];
@@ -139,19 +142,17 @@ function hangingStream(frames: string[], pingEveryMs?: number): Response {
   });
 }
 
-describe("ANTHROPIC_EFFORT / timeout resolution", () => {
-  it("defaults to xhigh and accepts the five levels", () => {
-    expect(resolveAnthropicEffort({})).toBe("xhigh");
-    expect(resolveAnthropicEffort({ ANTHROPIC_EFFORT: "  " })).toBe("xhigh");
+describe("effort levels / timeout resolution", () => {
+  it("reads the five levels, ignoring case and surrounding space", () => {
     for (const level of ["low", "medium", "high", "xhigh", "max"]) {
-      expect(resolveAnthropicEffort({ ANTHROPIC_EFFORT: level })).toBe(level);
+      expect(parseAnthropicEffort(level)).toBe(level);
     }
+    expect(parseAnthropicEffort("  XHigh ")).toBe("xhigh");
   });
 
-  it("rejects an invalid value with a clear message", () => {
-    expect(() => resolveAnthropicEffort({ ANTHROPIC_EFFORT: "extra" })).toThrow(
-      /Invalid ANTHROPIC_EFFORT "extra".*low, medium, high, xhigh, max/,
-    );
+  it("returns null for anything else", () => {
+    expect(parseAnthropicEffort("extra")).toBeNull();
+    expect(parseAnthropicEffort("  ")).toBeNull();
   });
 
   it("overall cap defaults to 15 minutes", () => {
@@ -166,7 +167,12 @@ for (const flow of FLOWS) {
       const fetchImpl = fetchReturning(() =>
         anthropicStreamResponse(anthropicToolMessage(flow.tool, flow.okInput())),
       );
-      await flow.call(portWith(fetchImpl, recorder, { effort: "high" }), "call-1");
+      await flow.call(
+        portWith(fetchImpl, recorder, {
+          readCoachModel: async () => ({ model: "claude-opus-4-7", effort: "high" }),
+        }),
+        "call-1",
+      );
 
       const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
         .calls[0]![1] as RequestInit;
@@ -185,32 +191,54 @@ for (const flow of FLOWS) {
       expect(rows[0]!.request).toMatchObject({ stream: true, tool_choice: { type: "auto" } });
     });
 
-    it("defaults effort from ANTHROPIC_EFFORT, else xhigh", async () => {
-      const prev = process.env.ANTHROPIC_EFFORT;
+    it("uses the tested default when nothing is saved, whatever the old env vars say", async () => {
+      const prev = {
+        model: process.env.ANTHROPIC_MODEL,
+        effort: process.env.ANTHROPIC_EFFORT,
+      };
+      process.env.ANTHROPIC_MODEL = "claude-haiku-4-5";
+      process.env.ANTHROPIC_EFFORT = "low";
       try {
-        for (const [env, expected] of [
-          [undefined, "xhigh"],
-          ["max", "max"],
-        ] as const) {
-          if (env === undefined) delete process.env.ANTHROPIC_EFFORT;
-          else process.env.ANTHROPIC_EFFORT = env;
-          const { recorder } = memoryRecorder();
-          const fetchImpl = fetchReturning(() =>
-            anthropicStreamResponse(
-              anthropicToolMessage(flow.tool, flow.okInput()),
-            ),
-          );
-          await flow.call(portWith(fetchImpl, recorder), "call-e");
-          const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
-            .calls[0]![1] as RequestInit;
-          expect(JSON.parse(String(init.body)).output_config).toEqual({
-            effort: expected,
-          });
-        }
+        const { recorder, rows } = memoryRecorder();
+        const fetchImpl = fetchReturning(() =>
+          anthropicStreamResponse(anthropicToolMessage(flow.tool, flow.okInput())),
+        );
+        await flow.call(portWith(fetchImpl, recorder), "call-e");
+        const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
+          .calls[0]![1] as RequestInit;
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        expect(body.model).toBe(TESTED_COACH_MODEL.model);
+        expect(body.output_config).toEqual({ effort: TESTED_COACH_MODEL.effort });
+        expect(rows[0]!.model).toBe(TESTED_COACH_MODEL.model);
       } finally {
-        if (prev === undefined) delete process.env.ANTHROPIC_EFFORT;
-        else process.env.ANTHROPIC_EFFORT = prev;
+        for (const [key, value] of [
+          ["ANTHROPIC_MODEL", prev.model],
+          ["ANTHROPIC_EFFORT", prev.effort],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
       }
+    });
+
+    it("sends the pair the call is handed over the one in force, and logs it", async () => {
+      const { recorder, rows } = memoryRecorder();
+      const fetchImpl = fetchReturning(() =>
+        anthropicStreamResponse(anthropicToolMessage(flow.tool, flow.okInput())),
+      );
+      const readCoachModel = vi.fn(async () => TESTED_COACH_MODEL);
+      await flow.call(portWith(fetchImpl, recorder, { readCoachModel }), "call-h", {
+        model: "claude-opus-5-5",
+        effort: "medium",
+      });
+      const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
+        .calls[0]![1] as RequestInit;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body.model).toBe("claude-opus-5-5");
+      expect(body.output_config).toEqual({ effort: "medium" });
+      expect(readCoachModel).not.toHaveBeenCalled();
+      expect(rows[0]!.model).toBe("claude-opus-5-5");
+      expect(rows[0]!.request).toMatchObject({ output_config: { effort: "medium" } });
     });
 
     it("reassembles thinking, text and tool_use and logs the non-streaming shape", async () => {

@@ -10,7 +10,8 @@ import type {
 import type { ModelPacket } from "../packet/types.js";
 import { readAnthropicApiKey } from "../settings/anthropicStore.js";
 import { resolveLlmProvider } from "../settings/sources.js";
-import { resolveAnthropicEffort, type AnthropicEffort } from "./effort.js";
+import { resolveCoachModel, type CoachModel } from "./coachModel.js";
+import type { AnthropicEffort } from "./effort.js";
 import { readMessageStream } from "./anthropicStream.js";
 import {
   LlmHttpError,
@@ -70,8 +71,6 @@ const DEFAULT_TIMEOUT_MS = 900_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 /** Thinking tokens count toward max_tokens; leave generous room for the reply. */
 const MAX_OUTPUT_TOKENS = 64_000;
-/** Match Claude app dogfood (Opus 4.7). Override with ANTHROPIC_MODEL. */
-const DEFAULT_MODEL = "claude-opus-4-7";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const WEEKLY_TOOL_NAME = "submit_weekly_reply";
@@ -99,10 +98,11 @@ export type AnthropicLlmPortOptions = {
   timeoutMs?: number;
   /** Abort after this long without stream data. Defaults to 60 seconds. */
   idleTimeoutMs?: number;
-  /** Thinking effort. Defaults to ANTHROPIC_EFFORT or xhigh. */
-  effort?: AnthropicEffort;
-  /** Anthropic model id (defaults to ANTHROPIC_MODEL or claude-opus-4-7). */
-  model?: string;
+  /**
+   * Model and effort for a call that is not handed a pair (defaults to
+   * resolveCoachModel). Read per call, like the key.
+   */
+  readCoachModel?: () => Promise<CoachModel>;
   /** Override Messages API URL (tests). */
   apiUrl?: string;
   /** Override credential loader (defaults to decrypting anthropic_connection). */
@@ -757,11 +757,6 @@ export function createAnthropicLlmPort(
   const fetchImpl = options?.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const timeoutMs = options?.timeoutMs ?? resolveAnthropicTimeoutMs();
   const idleTimeoutMs = options?.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-  const effort = options?.effort ?? resolveAnthropicEffort();
-  const model =
-    options?.model?.trim() ||
-    process.env.ANTHROPIC_MODEL?.trim() ||
-    DEFAULT_MODEL;
   const apiUrl = options?.apiUrl?.trim() || ANTHROPIC_MESSAGES_URL;
   const readApiKey =
     options?.readApiKey ??
@@ -769,18 +764,26 @@ export function createAnthropicLlmPort(
       const protector = new SecretProtector(options?.dataProtectionKey);
       return readAnthropicApiKey(protector);
     });
+  const readCoachModel = options?.readCoachModel ?? resolveCoachModel;
   const recorder = options?.recorder ?? createPostgresLlmCallRecorder();
   const appVersion = options?.appVersion ?? resolveAppVersion();
   /**
    * Adaptive thinking with readable summaries. tool_choice stays "auto": a
    * forced tool skips the thinking block, so the prompt asks for the tool call.
    */
-  const REASONING_PARAMS = {
-    thinking: { type: "adaptive", display: "summarized" },
-    output_config: { effort },
-    tool_choice: { type: "auto" },
-    stream: true,
-  } as const;
+  function reasoningParams(effort: AnthropicEffort) {
+    return {
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort },
+      tool_choice: { type: "auto" },
+      stream: true,
+    } as const;
+  }
+
+  /** The pair the call was handed, else the one in force now. */
+  async function coachModelFor(callOptions: LlmCallOptions | undefined): Promise<CoachModel> {
+    return callOptions?.coachModel ?? (await readCoachModel());
+  }
 
   /** Append one row; a failing recorder never changes the caller's outcome. */
   async function safeRecord(row: LlmCallRecord): Promise<void> {
@@ -815,7 +818,7 @@ export function createAnthropicLlmPort(
     const base = {
       operation,
       provider: "anthropic" as const,
-      model,
+      model: requestBody.model,
       appVersion,
       weekSessionId: callOptions?.weekSessionId ?? null,
       parentCallId: null,
@@ -904,12 +907,13 @@ export function createAnthropicLlmPort(
     if (!apiKey) {
       throw new LlmNotConfiguredError();
     }
+    const coachModel = await coachModelFor(callOptions);
     const requestBody: AnthropicMessagesRequest = {
-      model,
+      model: coachModel.model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system,
       tools: [aboutYouToolSchema(toolDescription)],
-      ...REASONING_PARAMS,
+      ...reasoningParams(coachModel.effort),
       messages: [{ role: "user", content: userPrompt }],
     };
     return attempt(
@@ -939,11 +943,12 @@ export function createAnthropicLlmPort(
       if (!apiKey) {
         throw new LlmNotConfiguredError();
       }
+      const coachModel = await coachModelFor(callOptions);
 
       const planWeek = resolveWeeklyPlanWeek(packet);
       const weekStartMonday = planWeek.weekStartMonday;
       const requestBody: AnthropicMessagesRequest = {
-        model,
+        model: coachModel.model,
         max_tokens: MAX_OUTPUT_TOKENS,
         system: weeklySystemPrompt(packet.goal),
         tools: [
@@ -954,7 +959,7 @@ export function createAnthropicLlmPort(
             input_schema: weeklyReplyToolSchema(),
           },
         ],
-        ...REASONING_PARAMS,
+        ...reasoningParams(coachModel.effort),
         messages: [
           {
             role: "user",
@@ -992,10 +997,11 @@ export function createAnthropicLlmPort(
       if (!apiKey) {
         throw new LlmNotConfiguredError();
       }
+      const coachModel = await coachModelFor(callOptions);
 
       const weekStartMonday = resolvePlanWeekStartMonday(packet);
       const requestBody: AnthropicMessagesRequest = {
-        model,
+        model: coachModel.model,
         max_tokens: MAX_OUTPUT_TOKENS,
         system: midWeekSystemPrompt(packet.goal),
         tools: [
@@ -1006,7 +1012,7 @@ export function createAnthropicLlmPort(
             input_schema: midWeekChatReplyToolSchema(),
           },
         ],
-        ...REASONING_PARAMS,
+        ...reasoningParams(coachModel.effort),
         messages: [
           {
             role: "user",
