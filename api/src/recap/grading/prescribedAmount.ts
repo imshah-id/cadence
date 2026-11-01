@@ -2,8 +2,6 @@ import type { PrescribedRun } from "../../llm/types.js";
 import type { TempoUnitPreference } from "../../tempo/port.js";
 import { formatDistanceM, formatMinutesDuration } from "../format.js";
 
-export { formatMinutesDuration as formatPlannedDuration } from "../format.js";
-
 /** What was planned: "8.00 km", "40 min", or "8.00 km, 45 min". */
 export function formatPrescribedAmount(
   run: PrescribedRun,
