@@ -86,4 +86,20 @@ test.describe("what you're training for, in Settings", () => {
     expect((await saving).status()).toBe(201);
     await expect(section).toContainText("General fitness, no race planned.");
   });
+
+  test("a goal that fails to load is not shown as no goal", async ({ page }) => {
+    await page.route("**/api/goal", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 500, json: { error: "internal" } })
+        : route.fallback(),
+    );
+    await page.goto("/settings");
+    const section = page.getByRole("region", { name: "What you’re training for" });
+    await expect(section).toContainText("Couldn’t load your goal. Try again.");
+    await expect(section).not.toContainText("No goal set yet.");
+    await expect(section.getByRole("button", { name: "Set your goal" })).toHaveCount(0);
+    await expect(section.getByRole("button", { name: "Change" })).toHaveCount(0);
+    // The rest of Settings still loads.
+    await expect(page.getByRole("region", { name: "Tempo connection" })).toBeVisible();
+  });
 });
