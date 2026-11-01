@@ -93,7 +93,7 @@ const BNE_EARLY_MONDAY: Fixture = {
 };
 
 const TREND_PACE =
-  "- **Easy pace (≤Z2, list/detail approx.)**: 12:52/mi → — → 11:16/mi → 12:04/mi ▁▁█▅";
+  "- **Easy pace (Easy Run, Recovery, untyped)**: 12:52/mi → — → 11:16/mi → 12:04/mi ▁▁█▅";
 const TREND_HR = "- **Avg easy HR**: 130 → — → 138 → 135 █▁▁▃";
 // Pace and HR read together: faster at a higher HR earns no verdict.
 const TREND_EASY =

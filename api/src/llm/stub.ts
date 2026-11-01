@@ -9,6 +9,7 @@ import {
   formatIsoWeekRangeShort,
   formatWeekRangeShort,
 } from "../clock/weekRangeShort.js";
+import { wholeWeeksBetween } from "../goal/context.js";
 import { goalDateLabel } from "../goal/sentence.js";
 import type { GoalKind, TrainingGoal } from "../goal/types.js";
 import type { ModelPacket } from "../packet/types.js";
@@ -284,13 +285,14 @@ const RETURN_DEFAULT_START_MIN = 15;
 const RETURN_WEEKLY_STEP_MIN = 3;
 const RETURN_MAX_MIN = 45;
 
-/** Whole weeks from `since` (YYYY-MM-DD) to the plan week's Monday; 0 when unknown. */
-function weeksSince(since: string | undefined, weekStartMonday: string): number {
-  if (!since || !/^\d{4}-\d{2}-\d{2}$/.test(since)) return 0;
-  const days =
-    (Date.parse(`${weekStartMonday}T00:00:00Z`) - Date.parse(`${since}T00:00:00Z`)) /
-    86400000;
-  return Number.isFinite(days) && days > 0 ? Math.floor(days / 7) : 0;
+/**
+ * Whole weeks since the return began: the packet's count, else from `since`
+ * when the packet has no coaching block; 0 when unknown.
+ */
+function weeksIntoReturn(packet: ModelPacket, weekStartMonday: string): number {
+  if (packet.coaching?.weeksIntoReturn !== undefined) return packet.coaching.weeksIntoReturn;
+  const since = packet.goal?.since;
+  return (since ? wholeWeeksBetween(since, weekStartMonday) : null) ?? 0;
 }
 
 /**
@@ -307,7 +309,7 @@ export function returnSessionMinutes(packet: ModelPacket, weekStartMonday: strin
       ? Math.min(parsed, RETURN_MAX_MIN)
       : RETURN_DEFAULT_START_MIN;
   const built =
-    start + RETURN_WEEKLY_STEP_MIN * weeksSince(packet.goal?.since, weekStartMonday);
+    start + RETURN_WEEKLY_STEP_MIN * weeksIntoReturn(packet, weekStartMonday);
   return Math.min(built, RETURN_MAX_MIN);
 }
 

@@ -14,8 +14,12 @@ import {
   resolveRecentHistoryLimit,
 } from "./lean.js";
 import { loadRecentWeekSummaries } from "./recentHistory.js";
-import { isoWeekMondayDate, nextIsoWeekBounds } from "../clock/isoWeek.js";
-import { resolveGoalContext } from "../goal/context.js";
+import {
+  isoWeekMondayDate,
+  localCalendarDateYmd,
+  nextIsoWeekBounds,
+} from "../clock/isoWeek.js";
+import { resolveGoalContext, wholeWeeksBetween } from "../goal/context.js";
 import { getCurrentGoal } from "../goal/store.js";
 import type { TrainingGoal } from "../goal/types.js";
 import { resolveConfiguredMaxHr } from "../recap/maxHr.js";
@@ -64,18 +68,23 @@ function toPacketWeek(session: WeekSession): ModelPacketWeek {
 /**
  * The packet's coaching block for the week starting `weekMonday`, or null with
  * no goal stored. With athlete settings it also carries the running log's
- * thresholds and max heart rate.
+ * thresholds and max heart rate. `goalStoredOn` (YYYY-MM-DD) counts a return's
+ * weeks when the athlete gave no start date.
  */
 export function packetCoaching(
   goal: TrainingGoal | null,
   weekMonday: string,
   settings?: TempoAthleteSettings | null,
+  goalStoredOn?: string,
 ): ModelPacketCoaching | null {
   if (!goal) return null;
   const context = resolveGoalContext(goal, weekMonday);
   const coaching: ModelPacketCoaching = { phase: context.phase };
   if (context.weeksToRace !== null) coaching.weeksToRace = context.weeksToRace;
   if (context.racePassed) coaching.racePassed = true;
+  const returnStart = goal.kind === "return" ? (goal.since ?? goalStoredOn) : undefined;
+  const weeksIntoReturn = returnStart ? wholeWeeksBetween(returnStart, weekMonday) : null;
+  if (weeksIntoReturn !== null) coaching.weeksIntoReturn = weeksIntoReturn;
   if (settings) Object.assign(coaching, settingsCoaching(settings));
   return coaching;
 }
@@ -143,10 +152,17 @@ export async function assembleLeanLiveContext(
     const goal = current?.goal ?? null;
     return {
       goal,
+      // The day the goal was stored, in the athlete's calendar.
+      goalStoredOn: current
+        ? localCalendarDateYmd(
+            { now: () => new Date(current.createdAt) },
+            input.focusSession.timezone,
+          )
+        : undefined,
       settings: goal ? await loadCoachingSettings(input.tempoPort) : null,
     };
   });
-  const [dossier, recentHistory, threadMessages, { goal, settings }] =
+  const [dossier, recentHistory, threadMessages, { goal, goalStoredOn, settings }] =
     await Promise.all([
       getCurrentDossier(),
       loadRecentWeekSummaries({ focusWeekSessionId: focusId, limit }),
@@ -162,6 +178,7 @@ export async function assembleLeanLiveContext(
     goal,
     planWeek?.startDate ?? isoWeekMondayDate(input.focusSession.isoWeek),
     settings,
+    goalStoredOn,
   );
 
   // Defense in depth: even if listThreadMessages were widened, drop other weeks.

@@ -154,13 +154,14 @@ export function goalProblem(d: GoalDraft): string | null {
 }
 
 /**
- * What the week's biggest run is called for this goal: "long run" when training for a half,
- * a marathon or a race of another distance, "longer run" for 5k, 10k, speed and staying fit.
+ * What the week's biggest run is called for this goal: "long run" when training for a half or
+ * a marathon, "longer run" for 5k, 10k, a race of another distance, speed and staying fit. The
+ * report shows a long-run section only for a half or a marathon, so only they are asked about one.
  * Null for getting back to running, which is not asked about one.
  */
 export function longRunName(d: GoalDraft): "long run" | "longer run" | null {
   if (d.goalKind === "return" || d.goalKind === null) return null;
-  if (d.goalKind === "race" && d.raceDistance !== "5k" && d.raceDistance !== "10k") {
+  if (d.goalKind === "race" && (d.raceDistance === "half" || d.raceDistance === "marathon")) {
     return "long run";
   }
   return "longer run";

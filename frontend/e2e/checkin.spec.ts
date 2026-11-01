@@ -338,7 +338,7 @@ test.describe("check-in", () => {
     const runs = card.getByRole("table", { name: "Your runs" });
     await expect(runs.getByRole("term").filter({ hasText: /^Pain$/ })).toHaveCount(2);
     await expect(card.getByRole("term").filter({ hasText: /^Pain$/ })).toHaveCount(3);
-    await expect(card).toContainText("Highest 3/10 (Thu)");
+    await expect(card).toContainText("highest 3/10 (Thu)");
 
     // Each run's row carries its own score, and the drift label only past a cap.
     const tue = runs.getByRole("row").filter({ hasText: "Tue Oct 20" });

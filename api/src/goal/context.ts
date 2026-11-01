@@ -30,6 +30,16 @@ function dayNumber(date: string): number {
   return Date.UTC(y, m - 1, d) / DAY_MS;
 }
 
+/**
+ * Whole weeks from `from` to `to` (both YYYY-MM-DD), never below 0. Null when either
+ * is not a date.
+ */
+export function wholeWeeksBetween(from: string, to: string): number | null {
+  if (!isGoalDate(from) || !isGoalDate(to)) return null;
+  const days = dayNumber(to) - dayNumber(from);
+  return days > 0 ? Math.floor(days / 7) : 0;
+}
+
 /** Race phase by whole weeks to race: 13+ base, 4–12 build, 2–3 peak, 0–1 taper. */
 export function phaseForWeeksToRace(weeks: number): RecapPhase {
   if (weeks >= 13) return "base";
