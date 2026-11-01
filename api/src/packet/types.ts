@@ -94,6 +94,11 @@ export type ModelPacketCoaching = {
   /** Present (true) only once the race date is before the focus week's Monday. */
   racePassed?: boolean;
   /**
+   * Return goals only: whole weeks from the start of the return to the week's Monday.
+   * The start is `goal.since`, else the day the goal was stored.
+   */
+  weeksIntoReturn?: number;
+  /**
    * The athlete's distance unit from the running log; the prompt prints
    * threshold paces in it. Present whenever the settings were read.
    */

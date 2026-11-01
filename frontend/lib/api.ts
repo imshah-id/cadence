@@ -353,6 +353,8 @@ export type SentCoaching = {
   phase: "recovery" | "base" | "build" | "peak" | "taper";
   weeksToRace?: number;
   racePassed?: boolean;
+  /** Return goals: whole weeks since the return began. */
+  weeksIntoReturn?: number;
   /** The running log's distance unit; threshold paces print in it. */
   unitPreference?: UnitPreference;
   /** Seconds per km, athlete-set. */

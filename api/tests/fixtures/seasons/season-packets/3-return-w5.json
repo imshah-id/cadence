@@ -210,6 +210,7 @@
   },
   "coaching": {
     "phase": "recovery",
+    "weeksIntoReturn": 5,
     "unitPreference": "metric",
     "maxHeartRateBpm": 178
   },

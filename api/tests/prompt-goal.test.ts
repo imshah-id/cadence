@@ -23,7 +23,11 @@ import { anthropicStreamResponse, anthropicToolMessage } from "./helpers.js";
 const WEEK_START = "2026-10-19";
 const PLAN_WEEK_START = "2026-10-26";
 
-function packetFor(goal: TrainingGoal | null, coachingMonday: string): ModelPacket {
+function packetFor(
+  goal: TrainingGoal | null,
+  coachingMonday: string,
+  goalStoredOn?: string,
+): ModelPacket {
   return buildModelPacket({
     dossier: { versionId: 1, body: "You run five days a week." },
     recapMarkdown: "## Summary\nSteady week.",
@@ -36,7 +40,7 @@ function packetFor(goal: TrainingGoal | null, coachingMonday: string): ModelPack
       weekSessionId: "00000000-0000-4000-8000-000000000001",
     },
     goal,
-    coaching: packetCoaching(goal, coachingMonday),
+    coaching: packetCoaching(goal, coachingMonday, null, goalStoredOn),
   });
 }
 
@@ -136,9 +140,28 @@ describe("Coach Cade's prompts open with the goal (#11)", () => {
     };
     const prompt = await capture().weekly(packetFor(goal, PLAN_WEEK_START));
     expect(firstLines(prompt, 2)).toEqual([
-      "Athlete goal: return to running since Mon Sep 28 2026; the athlete says: off for six weeks, cleared by my physio.",
+      "Athlete goal: return to running since Mon Sep 28 2026, 4 weeks in; the athlete says: off for six weeks, cleared by my physio.",
       "Training phase: recovery.",
     ]);
+  });
+
+  it("return with no start date: weeks counted from the day the goal was stored", async () => {
+    const stored = await capture().weekly(
+      packetFor({ kind: "return" }, PLAN_WEEK_START, "2026-10-21"),
+    );
+    expect(firstLines(stored, 1)).toEqual(["Athlete goal: return to running, first week."]);
+    const later = await capture().weekly(
+      packetFor({ kind: "return" }, PLAN_WEEK_START, "2026-10-12"),
+    );
+    expect(firstLines(later, 1)).toEqual(["Athlete goal: return to running, 2 weeks in."]);
+    // `since` wins over the stored day; with neither there is no count.
+    expect(
+      packetCoaching({ kind: "return", since: "2026-10-19" }, PLAN_WEEK_START, null, "2026-09-01")
+        ?.weeksIntoReturn,
+    ).toBe(1);
+    expect(packetCoaching({ kind: "return" }, PLAN_WEEK_START)?.weeksIntoReturn).toBeUndefined();
+    const notReturn = packetCoaching({ kind: "fitness" }, PLAN_WEEK_START, null, "2026-09-01");
+    expect(notReturn?.weeksIntoReturn).toBeUndefined();
   });
 
   it("race passed: says how long ago and asks what comes next", async () => {

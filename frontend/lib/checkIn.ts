@@ -21,6 +21,11 @@ export function dayLabel(ymd: string): string {
   return `${WEEKDAYS[date.getUTCDay()]} ${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
 }
 
+/** "Thu". */
+function weekdayLabel(ymd: string): string {
+  return dayLabel(ymd).split(" ")[0]!;
+}
+
 /** "Easy Run" and "easy" both read as "Easy run"; no type at all reads as "Run". */
 export function runTypeLabel(runType: string | null): string {
   const t = runType?.trim().toLowerCase();
@@ -48,13 +53,10 @@ export function isRaceRun(run: { runType: string | null }): boolean {
 /** The second run question: a race is asked against its target, and answered in words. */
 export const RACE_RESULT_QUESTION = "How did it go against your target?";
 
-/** "Race result" for the check-in card, with the day when the week had more than one race. */
+/** "Race result (Sat)" for the check-in card, as the report words it. */
 export function raceResultLines(answers: SubjectiveAnswers | null): Array<[string, string]> {
   const results = (answers?.runs ?? []).filter((r) => r.result?.trim());
-  return results.map((r) => [
-    results.length > 1 ? `Race result, ${dayLabel(r.date)}` : "Race result",
-    r.result!.trim(),
-  ]);
+  return results.map((r) => [`Race result (${weekdayLabel(r.date)})`, r.result!.trim()]);
 }
 
 function emptyToUndefined<T extends object>(value: T): T | undefined {
@@ -192,7 +194,7 @@ export function painText(row: SubjectiveRunRow | undefined): string | null {
   return words ? `${row.pain_score}/10 (${words})` : `${row.pain_score}/10`;
 }
 
-/** "Highest 3/10 (Thu)": the week's highest pain score and each day that reached it. Null when none. */
+/** "highest 3/10 (Thu)", as the report words it: the week's highest pain score and each day that reached it. Null when none. */
 export function painHighestText(runs: SubjectiveRunRow[]): string | null {
   const scored = runs.filter((r) => r.pain_score !== undefined);
   if (scored.length === 0) return null;
@@ -201,6 +203,6 @@ export function painHighestText(runs: SubjectiveRunRow[]): string | null {
     .filter((r) => r.pain_score === highest)
     .map((r) => r.date)
     .sort()
-    .map((date) => dayLabel(date).split(" ")[0]);
-  return `Highest ${highest}/10 (${days.join(", ")})`;
+    .map(weekdayLabel);
+  return `highest ${highest}/10 (${days.join(", ")})`;
 }

@@ -6,6 +6,7 @@ import {
   type PrescribedDay,
   type WeeklyReply,
 } from "../src/llm/index.js";
+import { packetCoaching } from "../src/packet/assemble.js";
 import { buildModelPacket, type BuildModelPacketInput } from "../src/packet/index.js";
 
 // The reviewed week is 2026-W43; the stub plans 2026-W44 (Mon Oct 26).
@@ -137,6 +138,36 @@ describe("the offline coach plans by goal (coaching-bias 20)", () => {
       expect(mins(week2)).toBeGreaterThan(mins(week0));
       expect(mins(week4)).toBeGreaterThan(mins(week2));
       expect(mins(week4) - mins(week0)).toBeLessThanOrEqual(15);
+    });
+
+    it("with no start date, builds week to week from the day the goal was stored", () => {
+      // Stored Wed Oct 21; the weekly reads of W43, W44 and W45 plan Oct 26, Nov 2 and Nov 9.
+      const goal: TrainingGoal = { kind: "return" };
+      const weeks = [
+        { isoWeek: "2026-W43", start: "2026-10-19", planMonday: "2026-10-26" },
+        { isoWeek: "2026-W44", start: "2026-10-26", planMonday: "2026-11-02" },
+        { isoWeek: "2026-W45", start: "2026-11-02", planMonday: "2026-11-09" },
+      ];
+      const mins = weeks.map(({ isoWeek, start, planMonday }) => {
+        const packet = buildModelPacket({
+          dossier: { versionId: 1, body: "Runs before work." },
+          recapMarkdown: SUMMARY_NO_TABLE,
+          week: {
+            isoWeek,
+            start: `${start}T00:00:00.000Z`,
+            end: `${start}T00:00:00.000Z`,
+          },
+          goal,
+          coaching: packetCoaching(goal, planMonday, null, "2026-10-21"),
+        });
+        const r = buildStubWeeklyReply(packet);
+        const checked = validateWeeklyReply(r, planMonday);
+        expect(checked.ok, checked.ok ? "" : checked.error).toBe(true);
+        return runs(r)[0]!.run!.durationS! / 60;
+      });
+      expect(mins[0]).toBe(15);
+      expect(mins[1]).toBeGreaterThan(mins[0]!);
+      expect(mins[2]).toBeGreaterThan(mins[1]!);
     });
   });
 

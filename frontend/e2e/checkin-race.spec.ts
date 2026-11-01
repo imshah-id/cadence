@@ -131,4 +131,6 @@ test("a race is asked against its target, and the result reaches Your week", asy
   await expect(runs).toContainText("19:58, just under my 20 min target");
   await expect(card.getByRole("heading", { name: "Your check-in" })).toBeVisible();
   await expect(card.getByRole("term").filter({ hasText: "Race result" })).toHaveCount(1);
+  // With its day, as the report words it.
+  await expect(card.getByRole("term").filter({ hasText: "Race result (Thu)" })).toHaveCount(1);
 });

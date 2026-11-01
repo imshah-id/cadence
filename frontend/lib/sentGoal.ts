@@ -33,8 +33,17 @@ export function trainingForLabel(goal: SentGoal, coaching: SentCoaching | null):
   switch (goal.kind) {
     case "fitness":
       return "general fitness";
-    case "return":
-      return `coming back to running${goal.since ? ` since ${dateWithYear(goal.since)}` : ""}`;
+    case "return": {
+      const since = goal.since ? ` since ${dateWithYear(goal.since)}` : "";
+      const weeks = coaching?.weeksIntoReturn;
+      const timing =
+        weeks === undefined
+          ? ""
+          : weeks === 0
+            ? ", first week"
+            : `, ${weeks} ${weeks === 1 ? "week" : "weeks"} in`;
+      return `coming back to running${since}${timing}`;
+    }
     case "race":
     case "speed": {
       const distance = goal.distance ? DISTANCE_WORDS[goal.distance] : "race";

@@ -292,7 +292,13 @@ test.describe("onboarding", () => {
     await page.getByRole("radio", { name: "A race" }).click();
     await chip(page, "Other").click();
     await page.getByLabel("Which race?").fill("Hill 15k");
-    await finishAfterGoal(page);
+    // The report has no long-run section for a race of another distance, so it is not asked
+    // about a long run.
+    await next(page).click();
+    await page.getByRole("checkbox", { name: "Tue" }).click();
+    await expect(page.getByText("Which day suits a longer run?")).toBeVisible();
+    for (let i = 0; i < 3; i += 1) await next(page).click();
+    await page.getByRole("button", { name: "Finish" }).click();
 
     await expect.poll(() => saved.length).toBe(1);
     expect(saved[0]!.goal).toEqual({ kind: "race", distance: "other", raceName: "Hill 15k" });

@@ -29,6 +29,11 @@ function weeksOut(weeks: number): string {
   return `${weeks} week${weeks === 1 ? "" : "s"} out`;
 }
 
+function weeksIn(weeks: number): string {
+  if (weeks === 0) return "first week";
+  return `${weeks} week${weeks === 1 ? "" : "s"} in`;
+}
+
 /** "(Lakeshore Half) on Sun Mar 14 2027, 20 weeks out" — the parts that exist. */
 function raceParts(goal: TrainingGoal, coaching: ModelPacketCoaching | null): string[] {
   const parts: string[] = [];
@@ -66,10 +71,12 @@ const GOAL_TEXT: Record<
     return withTarget(withRace.join(", "), goal);
   },
   fitness: (goal) => withTarget("general fitness, no race planned", goal),
-  return: (goal) => {
-    const head = goal.since
+  return: (goal, coaching) => {
+    const since = goal.since
       ? `return to running since ${goalDateLabel(goal.since)}`
       : "return to running";
+    const weeks = coaching?.weeksIntoReturn;
+    const head = weeks === undefined ? since : `${since}, ${weeksIn(weeks)}`;
     return goal.startingPoint ? `${head}; the athlete says: ${goal.startingPoint}` : head;
   },
 };
