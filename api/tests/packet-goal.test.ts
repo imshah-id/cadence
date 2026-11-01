@@ -129,11 +129,21 @@ describe("the packet carries the goal (coaching-bias 10)", () => {
     const { app, id } = await ready(RETURN);
     const lastPacket = await chat(app, id);
     expect(lastPacket.packet.goal).toEqual(RETURN);
+    // Since Oct 5, two weeks before the focus week's Monday.
     expect(lastPacket.packet.coaching).toEqual({
       phase: "recovery",
+      weeksIntoReturn: 2,
       unitPreference: "imperial",
       maxHeartRateBpm: 201,
     });
+  });
+
+  it("a return goal with no start date counts its weeks from the day it was stored", async () => {
+    const { since: _since, ...undated } = RETURN;
+    const { app, id } = await ready(undated);
+    const lastPacket = await chat(app, id);
+    // Stored Sun Oct 25 (the clock), within the focus week: no whole week yet.
+    expect(lastPacket.packet.coaching?.weeksIntoReturn).toBe(0);
   });
 
   it("with no goal stored both fields are null in the conversation and the weekly read", async () => {
