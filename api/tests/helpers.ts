@@ -27,6 +27,7 @@ export async function resetAppTables(): Promise<void> {
     DELETE FROM thread_messages;
     DELETE FROM weekly_reply_runs;
     DELETE FROM athlete_preferences;
+    DELETE FROM coach_model_settings;
     DELETE FROM week_sessions;
     DELETE FROM dossier_versions;
     DELETE FROM dossier_proposals;

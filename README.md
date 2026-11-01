@@ -254,6 +254,7 @@ cd api && npm run dev
 | GET | `/settings` | Tempo + Anthropic summary — **403** until disclaimer accepted |
 | GET/PUT/DELETE | `/settings/tempo` | Encrypted Tempo base URL + API key (GET masked only) |
 | GET/PUT/DELETE | `/settings/anthropic` | Encrypted Anthropic API key (GET masked only) |
+| GET/PUT/DELETE | `/settings/coach-model` | Coach Cade's model and thinking effort. GET: the saved choice, what is in force, and the models (with their efforts) that can be chosen. PUT `{ model, effort }` saves a model and effort from that list (400 otherwise); it takes effect on the next coach call. DELETE resets to the tested default, Opus 4.7 at `xhigh` (ADR 0004). **403** until the disclaimer is accepted |
 | GET | `/settings/last-packet` | Last redacted outbound model packet summary + JSON — **403** until accepted |
 | POST | `/packet` | Assemble lean redacted model packet (current dossier + last N prior week summaries/plans + focus-week thread + Tempo attachments); persists last-packet for transparency — **403** until accepted. N via `recentHistoryLimit` or `PACKET_RECENT_HISTORY_LIMIT` (default 4). Archived mid-week chatter is excluded. |
 | GET | `/tempo/workouts` | List workouts via TempoPort (live HTTP or `TEMPO_EXPORT_PATH` zip; query: page, pageSize, startDate, endDate, …) — **403** until accepted; GPS/route stripped |

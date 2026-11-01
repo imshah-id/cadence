@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { SecretProtector } from "../crypto/secretProtector.js";
+import { TESTED_COACH_MODEL } from "../llm/coachModel.js";
+import { parseAnthropicEffort } from "../llm/effort.js";
 import { requireDisclaimer } from "../middleware/requireDisclaimer.js";
 import {
   assertPacketHasNoPiiOrGps,
@@ -10,6 +12,12 @@ import {
   getAnthropicConnection,
   putAnthropicConnection,
 } from "../settings/anthropicStore.js";
+import { loadCoachModelCatalogue } from "../settings/coachModelCatalogue.js";
+import {
+  clearCoachModel,
+  getSavedCoachModel,
+  saveCoachModel,
+} from "../settings/coachModelStore.js";
 import type { RuntimeSources } from "../settings/sources.js";
 import {
   deleteTempoConnection,
@@ -26,6 +34,22 @@ export type SettingsRouteOptions = {
 
 function protectorFrom(options: SettingsRouteOptions): SecretProtector {
   return new SecretProtector(options.dataProtectionKey);
+}
+
+/** What Settings shows for Coach Cade's model: the choice, what is in force, and what can be chosen. */
+async function coachModelView() {
+  const [saved, anthropic] = await Promise.all([
+    getSavedCoachModel(),
+    getAnthropicConnection(),
+  ]);
+  const catalogue = await loadCoachModelCatalogue({ saved, hasKey: anthropic.configured });
+  return {
+    saved,
+    effective: saved ?? TESTED_COACH_MODEL,
+    tested: TESTED_COACH_MODEL,
+    models: catalogue.models,
+    fallback: catalogue.fallback,
+  };
 }
 
 export function createSettingsRoutes(options: SettingsRouteOptions): Hono {
@@ -113,6 +137,44 @@ export function createSettingsRoutes(options: SettingsRouteOptions): Hono {
   routes.delete("/settings/anthropic", async (c) => {
     await deleteAnthropicConnection();
     return c.json(await getAnthropicConnection());
+  });
+
+  // Writes are accepted in stub and demo modes too: only the page hides the section,
+  // and the demo season sets its effort through here.
+  routes.get("/settings/coach-model", async (c) => {
+    return c.json(await coachModelView());
+  });
+
+  routes.put("/settings/coach-model", async (c) => {
+    let body: { model?: unknown; effort?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid_json" }, 400);
+    }
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    if (!model || typeof body.effort !== "string") {
+      return c.json({ error: "model_and_effort_required" }, 400);
+    }
+    const effort = parseAnthropicEffort(body.effort);
+    if (!effort) {
+      return c.json({ error: "invalid_effort" }, 400);
+    }
+    const view = await coachModelView();
+    const choice = view.models.find((m) => m.id === model);
+    if (!choice) {
+      return c.json({ error: "unknown_model" }, 400);
+    }
+    if (!choice.efforts.includes(effort)) {
+      return c.json({ error: "effort_not_supported" }, 400);
+    }
+    await saveCoachModel({ model, effort });
+    return c.json(await coachModelView());
+  });
+
+  routes.delete("/settings/coach-model", async (c) => {
+    await clearCoachModel();
+    return c.json(await coachModelView());
   });
 
   /**

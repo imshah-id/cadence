@@ -1,3 +1,4 @@
+import { getSavedCoachModel } from "../settings/coachModelStore.js";
 import type { AnthropicEffort } from "./effort.js";
 
 /** The model and thinking effort one coach call is sent with. */
@@ -13,10 +14,10 @@ export const TESTED_COACH_MODEL: CoachModel = {
 };
 
 /**
- * The pair the next coach call uses. Read per call, like the API key, so a
- * change applies without a restart. Only the tested default for now; the
- * athlete's saved setting comes next (issue #52).
+ * The pair the next coach call uses: the athlete's saved setting, else the
+ * tested default. Read per call, like the API key, so a change applies
+ * without a restart.
  */
 export async function resolveCoachModel(): Promise<CoachModel> {
-  return TESTED_COACH_MODEL;
+  return (await getSavedCoachModel()) ?? TESTED_COACH_MODEL;
 }
