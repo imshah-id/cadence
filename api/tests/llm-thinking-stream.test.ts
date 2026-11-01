@@ -23,6 +23,7 @@ import type {
   LlmCallRow,
 } from "../src/llmCallLog/types.js";
 import { putAnthropicConnection } from "../src/settings/anthropicStore.js";
+import { clearCoachModel } from "../src/settings/coachModelStore.js";
 import {
   acceptAndReady,
   anthropicSseEvents,
@@ -192,6 +193,9 @@ for (const flow of FLOWS) {
     });
 
     it("uses the tested default when nothing is saved, whatever the old env vars say", async () => {
+      // The default resolver reads the saved setting; another file may have left one.
+      await migrate();
+      await clearCoachModel();
       const prev = {
         model: process.env.ANTHROPIC_MODEL,
         effort: process.env.ANTHROPIC_EFFORT,
