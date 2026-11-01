@@ -8,21 +8,13 @@ export const ANTHROPIC_EFFORT_LEVELS = [
 
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
 
-export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = "xhigh";
-
 /**
- * Resolve the thinking effort from `ANTHROPIC_EFFORT`. Unset/blank returns the
- * default; an invalid value throws so the API fails at startup.
+ * Read a thinking effort level, ignoring case and surrounding space. Anything
+ * that is not one of the five levels returns null.
  */
-export function resolveAnthropicEffort(
-  env: Record<string, string | undefined> = process.env,
-): AnthropicEffort {
-  const raw = env.ANTHROPIC_EFFORT?.trim().toLowerCase();
-  if (!raw) return DEFAULT_ANTHROPIC_EFFORT;
-  if ((ANTHROPIC_EFFORT_LEVELS as readonly string[]).includes(raw)) {
-    return raw as AnthropicEffort;
-  }
-  throw new Error(
-    `Invalid ANTHROPIC_EFFORT "${env.ANTHROPIC_EFFORT?.trim()}": expected one of ${ANTHROPIC_EFFORT_LEVELS.join(", ")}.`,
-  );
+export function parseAnthropicEffort(raw: string): AnthropicEffort | null {
+  const value = raw.trim().toLowerCase();
+  return (ANTHROPIC_EFFORT_LEVELS as readonly string[]).includes(value)
+    ? (value as AnthropicEffort)
+    : null;
 }

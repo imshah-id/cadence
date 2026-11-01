@@ -1,4 +1,5 @@
 import type { ModelPacket } from "../packet/types.js";
+import type { CoachModel } from "./coachModel.js";
 import type {
   DossierAuditDraft,
   DossierAuditInput,
@@ -16,6 +17,11 @@ export type LlmCallOptions = {
   callId?: string;
   /** Validated week session (the packet's own id may be synthetic). */
   weekSessionId?: string | null;
+  /**
+   * Model and effort for this call. A run that may ask more than once passes the
+   * pair it resolved at the start, so a retry never switches model.
+   */
+  coachModel?: CoachModel;
 };
 
 /**

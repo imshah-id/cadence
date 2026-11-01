@@ -7,7 +7,9 @@ import {
   createStubLlmPort,
   expectedPlanDates,
   LlmSchemaError,
+  TESTED_COACH_MODEL,
   validateWeeklyReply,
+  type CoachModel,
   type LlmPort,
   type WeeklyReply,
 } from "../src/llm/index.js";
@@ -68,9 +70,11 @@ describe("a refused weekly reply is asked for once more", () => {
   function flakyPort(failures: Array<"throws" | "invalid">) {
     const stub = createStubLlmPort();
     let calls = 0;
+    const coachModels: Array<CoachModel | undefined> = [];
     const port: LlmPort = {
       ...stub,
       async generateWeeklyReply(packet, options) {
+        coachModels.push(options?.coachModel);
         const failure = failures[calls];
         calls += 1;
         if (failure === "throws") throw new LlmSchemaError("prescribedWeek must be an object");
@@ -79,7 +83,7 @@ describe("a refused weekly reply is asked for once more", () => {
         return reply;
       },
     };
-    return { port, calls: () => calls };
+    return { port, calls: () => calls, coachModels };
   }
 
   async function askForReply(port: LlmPort) {
@@ -111,6 +115,14 @@ describe("a refused weekly reply is asked for once more", () => {
     expect(res.status).toBe(200);
     expect((await json(res)).prescribed).toBeTruthy();
     expect(calls()).toBe(2);
+  });
+
+  it("hands both attempts the one model and effort it resolved for the run", async () => {
+    const { port, coachModels } = flakyPort(["throws"]);
+    expect((await askForReply(port)).status).toBe(200);
+    expect(coachModels).toHaveLength(2);
+    expect(coachModels[0]).toEqual(TESTED_COACH_MODEL);
+    expect(coachModels[1]).toBe(coachModels[0]);
   });
 
   it("recovers when the route's own check refuses the first reply", async () => {

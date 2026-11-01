@@ -36,6 +36,7 @@ import {
   type TempoConnection,
   type ThreadNote,
 } from "@/lib/api";
+import { CoachModelSection } from "@/components/CoachModelSection";
 import { GoalFields } from "@/components/GoalFields";
 import { NoteCard, toNote } from "@/components/NoteCard";
 import {
@@ -457,6 +458,8 @@ export default function SettingsPage() {
           </>
         )}
       </section>
+
+      <CoachModelSection offline={modelOffline} demo={sources?.demo ?? false} />
 
       <section className="flex flex-col gap-3" aria-label="Appearance">
         <SectionTitle>Appearance</SectionTitle>

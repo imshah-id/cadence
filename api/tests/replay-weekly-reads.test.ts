@@ -14,12 +14,16 @@ import { longRunVerdictIn, mentionsMarathon, replayCheckFailures } from "../scri
 const api = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = path.join(api, "tests/fixtures/replay-packets");
 
-function dryRun(packets: string, out = mkdtempSync(path.join(tmpdir(), "replay-out-"))) {
+function dryRun(
+  packets: string,
+  out = mkdtempSync(path.join(tmpdir(), "replay-out-")),
+  extraArgs: string[] = [],
+) {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
   const run = spawnSync(
     path.join(api, "node_modules/.bin/tsx"),
-    ["scripts/replay-weekly-reads.ts", "--packets", packets, "--dry-run", "--out", out],
+    ["scripts/replay-weekly-reads.ts", "--packets", packets, "--dry-run", "--out", out, ...extraArgs],
     { cwd: api, env, encoding: "utf8" },
   );
   return { ...run, out, report: () => readFileSync(path.join(out, "report.md"), "utf8") };
@@ -86,6 +90,16 @@ describe("replay dry run over a packet folder", () => {
     expect(report).toContain("## 01 (01-stay-fit.json)");
     expect(report).toContain("## 02 (02-10k.json)");
     expect(report).toMatch(/## Goal checks\n\nAll passed/);
+  }, 30_000);
+
+  it("takes --model and --effort, and refuses an effort that is not one of the five levels", () => {
+    const ok = dryRun(FIXTURE, undefined, ["--model", "claude-opus-5-5", "--effort", "high"]);
+    expect(ok.stderr).toBe("");
+    expect(ok.status).toBe(0);
+
+    const bad = dryRun(FIXTURE, undefined, ["--effort", "extra"]);
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/Invalid --effort "extra".*low, medium, high, xhigh, max/);
   }, 30_000);
 
   it("exits non-zero and names the packet when a check fails", () => {

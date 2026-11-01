@@ -15,6 +15,9 @@
  * --dry-run to exercise the whole run with the offline stub, at no cost, into a
  * separate folder.
  *
+ * Pass --model <id> for calls with no model of their own, and --effort <level>
+ * for every call. Without them, the tested default (Opus 4.7 at xhigh) applies.
+ *
  * Pass --packets <dir> to replay a folder of packets instead of the demo
  * snapshot, such as the synthetic seasons that are not marathon blocks:
  *
@@ -23,7 +26,7 @@
  * The folder holds one JSON file per weekly call, replayed in file-name order.
  * Each file is a model packet as the app builds it, with the athlete's goal in
  * its `goal` field, or `{ "packet": {...}, "model": "..." }` to pin the model
- * (otherwise ANTHROPIC_MODEL or the port's default). A packet has no old reply,
+ * (otherwise --model, else the tested default). A packet has no old reply,
  * so its report shows the new reply only. Replies and the report go to
  * .scratch/replay-packets/<folder name> (with -dry-run on a dry run).
  * Pass --out <dir> to write somewhere else, with either source.
@@ -50,6 +53,8 @@ import { fileURLToPath } from "node:url";
 import type { TrainingGoal } from "../src/goal/types.js";
 import { createAnthropicLlmPort, weeklyUserPromptFor } from "../src/llm/anthropic.js";
 import { askOnceMore } from "../src/llm/askOnceMore.js";
+import { TESTED_COACH_MODEL } from "../src/llm/coachModel.js";
+import { ANTHROPIC_EFFORT_LEVELS, parseAnthropicEffort, type AnthropicEffort } from "../src/llm/effort.js";
 import { LlmSchemaError } from "../src/llm/port.js";
 import { createStubLlmPort } from "../src/llm/stub.js";
 import type { PrescribedDay, WeeklyReply } from "../src/llm/types.js";
@@ -63,14 +68,34 @@ const SNAPSHOT = path.resolve(here, "../../demo/snapshot.sql");
 const reportOnly = process.argv.includes("--report-only");
 const dryRun = process.argv.includes("--dry-run");
 
-/** The value after a flag such as --packets, resolved from the working directory. */
-function flagPath(flag: string): string | null {
+/** The value after a flag such as --model, or null when the flag is absent. */
+function flagValue(flag: string, what: string): string | null {
   const i = process.argv.indexOf(flag);
   if (i < 0) return null;
   const value = process.argv[i + 1];
-  if (!value || value.startsWith("--")) throw new Error(`${flag} needs a folder`);
-  return path.resolve(value);
+  if (!value || value.startsWith("--")) throw new Error(`${flag} needs ${what}`);
+  return value;
 }
+
+/** The value after a flag such as --packets, resolved from the working directory. */
+function flagPath(flag: string): string | null {
+  const value = flagValue(flag, "a folder");
+  return value === null ? null : path.resolve(value);
+}
+
+/** --effort, checked against the five levels; the tested default when absent. */
+function flagEffort(): AnthropicEffort {
+  const raw = flagValue("--effort", "a level");
+  if (raw === null) return TESTED_COACH_MODEL.effort;
+  const effort = parseAnthropicEffort(raw);
+  if (!effort) {
+    throw new Error(`Invalid --effort "${raw}": expected one of ${ANTHROPIC_EFFORT_LEVELS.join(", ")}.`);
+  }
+  return effort;
+}
+
+const MODEL = flagValue("--model", "a model id")?.trim() || TESTED_COACH_MODEL.model;
+const EFFORT = flagEffort();
 
 const PACKETS = flagPath("--packets");
 const OUT =
@@ -145,7 +170,7 @@ function folderCalls(dir: string): StoredCall[] {
     const raw = JSON.parse(readFileSync(path.join(dir, f), "utf8")) as Record<string, unknown>;
     const wrapped = raw.packet && typeof raw.packet === "object";
     const packet = (wrapped ? raw.packet : raw) as ModelPacket;
-    const model = wrapped && typeof raw.model === "string" ? raw.model : process.env.ANTHROPIC_MODEL?.trim() || undefined;
+    const model = wrapped && typeof raw.model === "string" ? raw.model : undefined;
     const stubRefusals = wrapped && typeof raw.stubRefusals === "number" ? raw.stubRefusals : 0;
     return { source: f, createdAt: null, model, packet, old: null, stubRefusals };
   });
@@ -195,7 +220,7 @@ async function replay(calls: StoredCall[]): Promise<void> {
     const port = dryRun
       ? createStubLlmPort()
       : createAnthropicLlmPort({
-          model: call.model,
+          readCoachModel: async () => ({ model: call.model ?? MODEL, effort: EFFORT }),
           readApiKey: async () => apiKey!,
           recorder: memoryRecorder(log),
         });

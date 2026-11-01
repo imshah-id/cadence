@@ -223,6 +223,14 @@ export async function migrate(): Promise<void> {
       read_at timestamptz NOT NULL DEFAULT NOW()
     );
 
+    -- Coach Cade's model and effort as the athlete chose them; no row = the tested default (ADR 0004).
+    CREATE TABLE IF NOT EXISTS coach_model_settings (
+      id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      model text NOT NULL,
+      effort text NOT NULL CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+
     -- The note a coach message produced, so the card shows under that reply.
     ALTER TABLE thread_messages
       ADD COLUMN IF NOT EXISTS dossier_proposal_id bigint;
