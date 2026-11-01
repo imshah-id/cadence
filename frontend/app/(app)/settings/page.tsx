@@ -83,8 +83,16 @@ function ConfirmClear({
  * What the athlete is training for, with Change. After the first answers this is the only
  * way to change the goal: saving stores it and tells Coach Cade, who notes it in About you.
  * An athlete who onboarded before goals were stored has none yet, and sets one here.
+ * When the goal could not be loaded there is no Change or Set: saving would replace a goal
+ * the athlete may still have.
  */
-function TrainingGoalSection({ initial }: { initial: StoredGoal | null }) {
+function TrainingGoalSection({
+  initial,
+  loadError,
+}: {
+  initial: StoredGoal | null;
+  loadError: UiError | null;
+}) {
   const [stored, setStored] = useState(initial);
   const [draft, setDraft] = useState<GoalDraft | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -145,6 +153,8 @@ function TrainingGoalSection({ initial }: { initial: StoredGoal | null }) {
             </Button>
           </div>
         </form>
+      ) : loadError ? (
+        <ErrorNote error={loadError} />
       ) : (
         <>
           {stored ? (
@@ -184,6 +194,7 @@ export default function SettingsPage() {
   const [anthropic, setAnthropic] = useState<AnthropicConnection | null>(null);
   const [sources, setSources] = useState<SettingsSources | null>(null);
   const [goal, setGoal] = useState<StoredGoal | null>(null);
+  const [goalError, setGoalError] = useState<UiError | null>(null);
   const [onboarded, setOnboarded] = useState(false);
   const [appearance, setAppearance] = useState<AppearancePreference>("dark");
   const [confirming, setConfirming] = useState<"tempo" | "anthropic" | null>(null);
@@ -198,14 +209,20 @@ export default function SettingsPage() {
     let cancelled = false;
     async function check() {
       try {
+        let goalFailure: UiError | null = null;
         const [settings, storedGoal, onboarding] = await Promise.all([
           fetchSettings(),
-          // The goal section is extra: if it cannot load, the connections still can.
-          fetchGoal().catch(() => null),
+          // The goal section is extra: if it cannot load, it says so and the connections still
+          // load. Only a 404 means no goal; fetchGoal throws on anything else.
+          fetchGoal().catch((err: unknown) => {
+            goalFailure = describeError(err, "Couldn’t load your goal. Try again.");
+            return null;
+          }),
           fetchOnboarding().catch(() => null),
         ]);
         if (cancelled) return;
         setGoal(storedGoal);
+        setGoalError(goalFailure);
         setOnboarded(onboarding != null && onboarding.status !== "needs_onboarding");
         setTempo(settings.tempo);
         setAnthropic(settings.anthropic);
@@ -322,8 +339,11 @@ export default function SettingsPage() {
         <Muted>{intro}</Muted>
       </PageHead>
 
-      {/* No goal before the first answers: onboarding asks for it. */}
-      {goal || onboarded ? <TrainingGoalSection initial={goal} /> : null}
+      {/* No goal before the first answers: onboarding asks for it. A failed load shows, since
+          there may be a goal stored. */}
+      {goal || onboarded || goalError ? (
+        <TrainingGoalSection initial={goal} loadError={goalError} />
+      ) : null}
 
       <section className="flex flex-col gap-3" aria-label="Tempo connection">
         <SectionTitle>Tempo</SectionTitle>
