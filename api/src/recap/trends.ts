@@ -415,7 +415,7 @@ export function buildTrendsMarkdown(
     const sp = snapshot.sparklines?.easyPace ?? "";
     const tail = sp ? ` ${sp}` : "";
     lines.push(
-      `- **Easy pace (≤Z2, list/detail approx.)**: ${chain}${tail}`,
+      `- **Easy pace (Easy Run, Recovery, untyped)**: ${chain}${tail}`,
     );
     lines.push("");
   }
