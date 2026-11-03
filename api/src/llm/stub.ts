@@ -23,10 +23,13 @@ import {
   validateDossierAuditDraft,
   validateDossierCorrectionDraft,
   validateDossierV1Draft,
+  planDateLabel,
   validateMidWeekChatReply,
+  validatePlanDayFix,
   validateWeeklyReply,
 } from "./schema.js";
 import { COACH_STANCE_SUMMARY } from "./stance.js";
+import type { TempoUnitPreference } from "../tempo/port.js";
 import type {
   DayType,
   DossierAuditDraft,
@@ -36,13 +39,15 @@ import type {
   DossierV1Draft,
   DossierV1Input,
   MidWeekChatReply,
-  PrescribedDay,
-  PrescribedRun,
-  PrescribedWeek,
-  ReadAnswer,
+  MidWeekChatReplyForm,
+  PlanDayFix,
+  PlanDayFixInput,
   ReadFlag,
+  SafetyCallout,
   WeeklyReply,
+  WeeklyReplyForm,
 } from "./types.js";
+import { checkInQuestions, packetUnit, weeklyReplyContext } from "./weeklyContext.js";
 
 /**
  * Resolve the plan week's Monday (YYYY-MM-DD) from a model packet.
@@ -87,31 +92,6 @@ export function resolveWeeklyPlanWeek(packet: ModelPacket): {
     weekStartMonday: resolvePlanWeekStartMonday(packet),
     isoWeek: null,
   };
-}
-
-function resolveIsoWeekLabel(packet: ModelPacket, weekStartMonday: string): string {
-  const label = packet.week?.isoWeek?.trim();
-  if (label && /^\d{4}-W\d{2}$/.test(label)) return label;
-
-  // Derive ISO week from the Monday calendar date (UTC noon).
-  const [y, m, d] = weekStartMonday.split("-").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const date = new Date(Date.UTC(y, m - 1, d));
-  date.setUTCDate(date.getUTCDate() + 3 - ((date.getUTCDay() + 6) % 7));
-  const isoYear = date.getUTCFullYear();
-  const week1 = new Date(Date.UTC(isoYear, 0, 4));
-  const isoWeek =
-    1 +
-    Math.round(
-      ((date.getTime() - week1.getTime()) / 86400000 -
-        3 +
-        ((week1.getUTCDay() + 6) % 7)) /
-        7,
-    );
-  return `${isoYear}-W${String(isoWeek).padStart(2, "0")}`;
 }
 
 /** The goal kind the stub plans for; no goal plans as fitness. */
@@ -349,16 +329,70 @@ function roundRunM(m: number): number {
   return Math.max(3000, Math.round(m / 500) * 500);
 }
 
+/** A planned distance as a coach writes it in the athlete's unit: "6.5 km", "4.5 mi" (half miles, never under 2). */
+function stubDistanceText(m: number, unit: TempoUnitPreference): string {
+  const rounded = roundRunM(m);
+  if (unit === "metric") return `${rounded / 1000} km`;
+  return `${Math.max(2, Math.round((rounded / METERS_PER_MILE) * 2) / 2)} mi`;
+}
+
+const STUB_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+function weekdayShort(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number) as [number, number, number];
+  return STUB_WEEKDAYS[new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay()]!;
+}
+
+/** A sentence from a fragment: capitalised, ending in a full stop. */
+function sentence(text: string): string {
+  const t = text.trim();
+  const capped = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
+}
+
 /**
- * Deterministic 7-day plan (Mon–Sun) shaped by the goal kind: race keeps the
- * easy / rest / easy / quality / rest / easy / long week, speed has one quality
- * session and one longer run, fitness three easy runs and an optional longer
- * one, return walk-run sessions in minutes. No goal plans as fitness. Distance
- * kinds scale the week from the last four weeks, else a modest default.
+ * One plan line in the plan grammar: "Tue 2026-10-27: easy, 4.5 mi. Easy
+ * pace, daily trainer. Keep HR relaxed." The amount comes straight after the
+ * day type and ends with a full stop, so a duration in the workout that
+ * follows is never read as the day's.
  */
-function buildStubDays(packet: ModelPacket, weekStartMonday: string): PrescribedDay[] {
+function stubPlanLine(
+  date: string,
+  p: StubDayPattern,
+  weekM: number,
+  unit: TempoUnitPreference,
+): string {
+  const amount =
+    p.dayType === "rest"
+      ? null
+      : p.minutes != null
+        ? `${p.minutes} min`
+        : p.share != null
+          ? stubDistanceText(p.share * weekM, unit)
+          : null;
+  const head = amount ? `${p.dayType}, ${amount}.` : `${p.dayType}.`;
+  const how = [p.structure, p.paceOrHr, p.shoes].filter((s): s is string => Boolean(s?.trim()));
+  const parts = [
+    head,
+    how.length > 0 ? sentence(how.join(", ")) : null,
+    p.strength ? sentence(`Strength: ${p.strength}`) : null,
+    p.notes ? sentence(p.notes) : null,
+  ].filter((s): s is string => s !== null);
+  return `${weekdayShort(date)} ${date}: ${parts.join(" ")}`;
+}
+
+/**
+ * Deterministic 7-day plan (Mon–Sun) as seven plan lines, shaped by the goal
+ * kind: race keeps the easy / rest / easy / quality / rest / easy / long week,
+ * speed has one quality session and one longer run, fitness three easy runs
+ * and an optional longer one, return walk-run sessions in minutes. No goal
+ * plans as fitness. Distance kinds scale the week from the last four weeks,
+ * else a modest default. Distances are written in the athlete's unit.
+ */
+function buildStubPlan(packet: ModelPacket, weekStartMonday: string): string {
   const dates = expectedPlanDates(weekStartMonday);
   const kind = stubGoalKind(packet);
+  const unit = packetUnit(packet);
   let pattern: StubDayPattern[];
   let weekM = 0;
   if (kind === "return") {
@@ -368,27 +402,7 @@ function buildStubDays(packet: ModelPacket, weekStartMonday: string): Prescribed
       kind === "race" ? RACE_PATTERN : kind === "speed" ? SPEED_PATTERN : FITNESS_PATTERN;
     weekM = recentWeeklyDistanceM(packet) ?? STUB_DEFAULT_WEEK_M[kind];
   }
-
-  return dates.map((date, i) => {
-    const p = pattern[i]!;
-    const day: PrescribedDay = { date, dayType: p.dayType };
-    if (p.dayType !== "rest" && (p.share != null || p.minutes != null)) {
-      const run: PrescribedRun = {
-        type: p.dayType === "quality" || p.dayType === "long" ? p.dayType : "easy",
-        distanceM: p.share != null ? roundRunM(p.share * weekM) : 0,
-        structure: p.structure ?? null,
-        paceOrHr: p.paceOrHr ?? null,
-        shoes: p.shoes ?? null,
-      };
-      if (p.minutes != null) run.durationS = p.minutes * 60;
-      day.run = run;
-    } else {
-      day.run = null;
-    }
-    if (p.strength !== undefined) day.strength = p.strength;
-    if (p.notes !== undefined) day.notes = p.notes;
-    return day;
-  });
+  return dates.map((date, i) => stubPlanLine(date, pattern[i]!, weekM, unit)).join("\n");
 }
 
 /** The second sentence of the headline, by goal kind. */
@@ -463,25 +477,10 @@ function buildStubFlags(packet: ModelPacket): ReadFlag[] {
   return flags;
 }
 
-/** The athlete's check-in questions, as they wrote them, from the weekly report. */
-function stubQuestions(packet: ModelPacket): string[] {
-  const md = packet.recapMarkdown ?? "";
-  const section = /^## Questions for coach\s*$([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(md);
-  if (!section) return [];
-  return section[1]!
-    .split("\n")
-    .map((line) => /^\s*\d+\.\s+(.*\S)\s*$/.exec(line)?.[1] ?? null)
-    .filter((q): q is string => q !== null);
-}
-
-/** One plain answer per question the athlete asked; none when they asked nothing. */
-function buildStubAnswers(packet: ModelPacket): ReadAnswer[] {
-  return stubQuestions(packet)
-    .slice(0, 8)
-    .map((question) => ({
-      question,
-      answer: "Keep the week as planned and treat rest days as real rest. Ask me again during the week if it still feels off.",
-    }));
+/** One plain answer to the check-in questions; none when they asked nothing. */
+function buildStubAnswer(packet: ModelPacket): string | undefined {
+  if (checkInQuestions(packet.recapMarkdown).length === 0) return undefined;
+  return "Keep the week as planned and treat rest days as real rest. Ask me again during the week if it still feels off.";
 }
 
 /** The stub's reasoning; the headline, flags and answers are shown above it. */
@@ -507,28 +506,46 @@ function buildStubSettingsBullets(packet: ModelPacket): string[] | undefined {
   ];
 }
 
-/** Pure builder used by the stub port (and tests). */
-export function buildStubWeeklyReply(packet: ModelPacket): WeeklyReply {
-  const planWeek = resolveWeeklyPlanWeek(packet);
-  const weekStartMonday = planWeek.weekStartMonday;
-  const week =
-    planWeek.isoWeek ?? resolveIsoWeekLabel(packet, weekStartMonday);
-  const prescribedWeek: PrescribedWeek = {
-    week,
-    days: buildStubDays(packet, weekStartMonday),
-  };
-  const reply: WeeklyReply = {
+/** A notice as one line of the weekly form: the severity word, the title as a sentence, the body. */
+function calloutLine(c: SafetyCallout): string {
+  const severity = c.severity ?? "caution";
+  const word = severity.charAt(0).toUpperCase() + severity.slice(1);
+  return `${word}: ${sentence(c.title)} ${c.body}`.trim();
+}
+
+/**
+ * The stub's weekly reply as Coach Cade's form: every box text or lines, the
+ * plan as seven lines that parse fully. Pure; used by the stub port and as a
+ * fake model reply in tests.
+ */
+export function buildStubWeeklyForm(packet: ModelPacket): WeeklyReplyForm {
+  const weekStartMonday = resolveWeeklyPlanWeek(packet).weekStartMonday;
+  const form: WeeklyReplyForm = {
     headline: buildStubHeadline(packet),
-    flags: buildStubFlags(packet),
-    answers: buildStubAnswers(packet),
+    flags: buildStubFlags(packet)
+      .map((f) => `${f.title}: ${f.detail}`)
+      .join("\n"),
     analysis: buildStubAnalysis(packet),
-    prescribedWeek,
+    plan: buildStubPlan(packet, weekStartMonday),
   };
+  const answer = buildStubAnswer(packet);
+  if (answer) form.answers = answer;
   const bullets = buildStubSettingsBullets(packet);
-  if (bullets) reply.settingsProposalBullets = bullets;
+  if (bullets) form.settingsProposalBullets = bullets.join("\n");
   const callouts = buildStubSafetyCallouts(packet);
-  if (callouts.length > 0) reply.safetyCallouts = callouts;
-  return reply;
+  if (callouts.length > 0) form.safetyCallouts = callouts.map(calloutLine).join("\n");
+  return form;
+}
+
+/** The stub's weekly reply as Cadence stores it: its form, read like any model's. */
+export function buildStubWeeklyReply(packet: ModelPacket): WeeklyReply {
+  const checked = validateWeeklyReply(
+    buildStubWeeklyForm(packet),
+    resolveWeeklyPlanWeek(packet).weekStartMonday,
+    weeklyReplyContext(packet),
+  );
+  if (!checked.ok) throw new LlmSchemaError(checked.error);
+  return checked.value;
 }
 
 function formatPaceMinPerKm(avgPaceS: number): string {
@@ -625,13 +642,13 @@ const PLAN_CHANGE_RE =
   /\b(cut|skip|shorten|move|swap|patch|change)\b/i;
 
 /**
- * Deterministic remaining-day plan patch for stub/CI (issue #38).
- * When the athlete asks to change the plan and a prescribed week is present,
- * rest the first quality day (else first easy) from Wednesday onward.
+ * Deterministic remaining-day plan change for stub/CI (issue #38), as lines
+ * in the plan grammar. When the athlete asks to change the plan and a plan is
+ * present, rest the first quality day (else first easy) from Wednesday onward.
  */
-export function buildStubPrescribedDayPatches(
+export function buildStubPlanChangeLines(
   packet: ModelPacket,
-): PrescribedDay[] | undefined {
+): { date: string; line: string }[] | undefined {
   const plan = packet.prescribedWeek;
   if (!plan?.days?.length) return undefined;
   const lastAthlete = [...packet.thread]
@@ -640,9 +657,10 @@ export function buildStubPrescribedDayPatches(
   if (!lastAthlete?.body || !PLAN_CHANGE_RE.test(lastAthlete.body)) {
     return undefined;
   }
-  const weekStartMonday = resolvePlanWeekStartMonday(packet);
-  const fromWed = expectedPlanDates(weekStartMonday)[2]!;
-  const remaining = plan.days.filter((d) => d.date >= fromWed);
+  const dates = expectedPlanDates(resolvePlanWeekStartMonday(packet));
+  const fromWed = dates[2]!;
+  // Only this week's dates: a line for another week would be dropped.
+  const remaining = plan.days.filter((d) => d.date >= fromWed && dates.includes(d.date));
   const target =
     remaining.find((d) => d.dayType === "quality") ??
     remaining.find((d) => d.dayType === "easy") ??
@@ -651,15 +669,17 @@ export function buildStubPrescribedDayPatches(
   return [
     {
       date: target.date,
-      dayType: "rest",
-      run: null,
-      notes: "Changed this week: rest and recover. The quality session is moved out.",
+      line: `${weekdayShort(target.date)} ${target.date}: rest. Changed this week: rest and recover. The quality session is moved out.`,
     },
   ];
 }
 
-/** Pure builder for mid-week free chat + attach/plan patch (issues #35–#39). */
-export function buildStubMidWeekChatReply(packet: ModelPacket): MidWeekChatReply {
+/**
+ * The stub's mid-week reply as Coach Cade's form: text and lines, any changed
+ * days as plan lines that parse. Pure; used by the stub port and as a fake
+ * model reply in tests.
+ */
+export function buildStubMidWeekForm(packet: ModelPacket): MidWeekChatReplyForm {
   const lastAthlete = [...packet.thread]
     .reverse()
     .find((m) => m.role === "athlete");
@@ -674,26 +694,38 @@ export function buildStubMidWeekChatReply(packet: ModelPacket): MidWeekChatReply
   const attachNote =
     attachFeedback ??
     "No run attached. Say more if something needs to change.";
-  const patches = buildStubPrescribedDayPatches(packet);
-  const patchNote = patches?.length
-    ? `Updated the plan for ${patches.map((p) => formatDayShort(p.date)).join(", ")}. Only the days still to come change.`
+  const changes = buildStubPlanChangeLines(packet);
+  const changeNote = changes?.length
+    ? `Updated the plan for ${changes.map((c) => formatDayShort(c.date)).join(", ")}. Only the days still to come change.`
     : null;
-  const reply: MidWeekChatReply = {
+  const form: MidWeekChatReplyForm = {
     body: [
       "Quick check-in for this week.",
       heard,
       dossierNote,
       attachNote,
-      ...(patchNote ? [patchNote] : []),
+      ...(changeNote ? [changeNote] : []),
     ].join(" "),
   };
-  if (patches?.length) reply.prescribedDayPatches = patches;
+  if (changes?.length) form.changes = changes.map((c) => c.line).join("\n");
   const bullets = buildStubMidWeekSettingsBullets(packet);
-  if (bullets) reply.settingsProposalBullets = bullets;
+  if (bullets) form.settingsProposalBullets = bullets.join("\n");
   const callouts = buildStubSafetyCallouts(packet);
-  if (callouts.length > 0) reply.safetyCallouts = callouts;
-  return reply;
+  if (callouts.length > 0) form.safetyCallouts = callouts.map(calloutLine).join("\n");
+  return form;
 }
+
+/** The stub's mid-week reply as Cadence stores it: its form, read like any model's. */
+export function buildStubMidWeekChatReply(packet: ModelPacket): MidWeekChatReply {
+  const checked = validateMidWeekChatReply(
+    buildStubMidWeekForm(packet),
+    resolvePlanWeekStartMonday(packet),
+    { unit: packetUnit(packet) },
+  );
+  if (!checked.ok) throw new LlmSchemaError(checked.error);
+  return checked.value;
+}
+
 function formatDistanceHint(
   meters: number,
   unit?: "metric" | "imperial",
@@ -1058,10 +1090,11 @@ export function createStubLlmPort(options?: StubLlmPortOptions): LlmPort {
         id: callOptions.callId,
         operation,
         provider: "stub",
+        serverHost: null,
         model: null,
         appVersion,
         weekSessionId: callOptions.weekSessionId ?? null,
-        parentCallId: null,
+        parentCallId: callOptions.parentCallId ?? null,
         request,
         responseRaw: JSON.stringify(output),
         httpStatus: null,
@@ -1088,9 +1121,9 @@ export function createStubLlmPort(options?: StubLlmPortOptions): LlmPort {
       packet: ModelPacket,
       callOptions?: LlmCallOptions,
     ): Promise<WeeklyReply> {
-      const draft = buildStubWeeklyReply(packet);
+      const draft = buildStubWeeklyForm(packet);
       const weekStartMonday = resolveWeeklyPlanWeek(packet).weekStartMonday;
-      const validated = validateWeeklyReply(draft, weekStartMonday);
+      const validated = validateWeeklyReply(draft, weekStartMonday, weeklyReplyContext(packet));
       if (!validated.ok) {
         throw new LlmSchemaError(validated.error);
       }
@@ -1101,9 +1134,9 @@ export function createStubLlmPort(options?: StubLlmPortOptions): LlmPort {
       packet: ModelPacket,
       callOptions?: LlmCallOptions,
     ): Promise<MidWeekChatReply> {
-      const draft = buildStubMidWeekChatReply(packet);
+      const draft = buildStubMidWeekForm(packet);
       const weekStartMonday = resolvePlanWeekStartMonday(packet);
-      const validated = validateMidWeekChatReply(draft, weekStartMonday);
+      const validated = validateMidWeekChatReply(draft, weekStartMonday, { unit: packetUnit(packet) });
       if (!validated.ok) {
         throw new LlmSchemaError(validated.error);
       }
@@ -1146,5 +1179,23 @@ export function createStubLlmPort(options?: StubLlmPortOptions): LlmPort {
       await recordOk("dossier_audit", callOptions, input, validated.value);
       return validated.value;
     },
+    async generatePlanDayFix(
+      input: PlanDayFixInput,
+      callOptions?: LlmCallOptions,
+    ): Promise<PlanDayFix> {
+      const draft = { line: buildStubPlanDayLine(input) };
+      const validated = validatePlanDayFix(draft, input);
+      if (!validated.ok) {
+        throw new LlmSchemaError(validated.error);
+      }
+      await recordOk("plan_day_fix", callOptions, input, validated.value);
+      return validated.value;
+    },
   };
+}
+
+/** The stub's line for "Add the details": an easy run for the date, in the athlete's unit. */
+export function buildStubPlanDayLine(input: PlanDayFixInput): string {
+  const distance = input.unit === "metric" ? "6 km" : "4 mi";
+  return `${planDateLabel(input.date)}: easy, ${distance}, relaxed and conversational.`;
 }

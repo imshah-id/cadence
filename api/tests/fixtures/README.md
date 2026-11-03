@@ -45,6 +45,54 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5433/ai_coach_test \
 
 It plays each season through the app on the offline stub (goal, About you, then a Sunday check-in each week), against a test database it clears. The exports regenerate byte for byte; the packets differ only in week-session ids and About you version numbers. `replay-seasons.test.ts` checks the packets against the scripts and runs the replay dry run over `season-packets/`.
 
+## `demo-operations/` (replay inputs from the demo)
+
+The three coach calls the demo snapshot's call log does not hold, as the app sends them for the demo athlete (fictional) at the snapshot's clock. The replay script replays them after the snapshot's own weekly, mid-week and About you calls, and they work as a `--packets` folder on their own. Each file names its `operation`:
+
+| File | Operation | What it is |
+|---|---|---|
+| `01-mid-week-attached-run.json` | `mid_week_chat` | A question about Tuesday's easy 6 with that run attached; the packet the mid-week chat sends, with both of the week's attached runs |
+| `02-about-you-audit.json` | `dossier_audit` | A tidy-up of About you as the snapshot holds it, with the athlete's goal beside the input |
+| `03-about-you-correction.json` | `dossier_correction` | A Fix something correction (the Thursday hill loop is closed, so Thursdays move to the canal path), with the goal beside the input |
+
+Written by `scripts/generate-demo-operation-fixtures.ts`, which drives the app's routes on the offline stub against a throwaway database holding the snapshot and keeps what reached the model port. Rebuild them when a packet or About you input changes:
+
+```bash
+cd api
+docker exec ai-coach-postgres psql -U postgres -c "CREATE DATABASE ai_coach_test_demo_ops"
+docker exec -i ai-coach-postgres psql -U postgres -q -d ai_coach_test_demo_ops < ../demo/snapshot.sql
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/ai_coach_test_demo_ops \
+  npx tsx scripts/generate-demo-operation-fixtures.ts
+docker exec ai-coach-postgres psql -U postgres -c "DROP DATABASE ai_coach_test_demo_ops"
+```
+
+A fresh load of the same snapshot writes the same bytes. `replay-weekly-reads.test.ts` replays the folder with the stub and expects every check to pass.
+
+
+## `self-hosted/` (recorded model-server streams)
+
+`omlx-gpt-oss-weekly.sse` is the raw SSE body of one weekly reply from a real oMLX server, saved byte for byte by the smoke script's `--record`; `.json` beside it is the sidecar (server and version, model, effort, context length, date, hardware, tokens) and `.packet.json` the packet that was sent (the demo snapshot's last weekly call). `llm-self-hosted-recording.test.ts` replays it through `createApp` with `recordedStreamResponse` from `tests/helpers.ts`. Re-record with:
+
+```bash
+cd api
+SH_KEY=... npx tsx scripts/smoke-self-hosted.ts --base-url http://<server>:8000 --key-env SH_KEY \
+  --model <id> --effort high --only weekly --server oMLX --hardware "<machine>" \
+  --record tests/fixtures/self-hosted/omlx-<name>-weekly.sse
+```
+
+## `regression-set.json` (the replay's hard inputs)
+
+The inputs every change to the reply contract is measured on: the 13 the 2026-11-01 benchmark found failing in at least half the self-hosted models, plus the 8 inputs of the blind review sample (one overlap), 20 in all, each `{ "input": "<root>/<id>", "why": "..." }`. The roots are the benchmark's: `snapshot` (the demo snapshot run, ids 01 to 17) and `seasons` (`seasons/season-packets/`, ids 01 to 18). Run it with the replay's `--only`, once per root, each into an output root named after it:
+
+```bash
+cd api
+npm run replay -- --out ../.scratch/benchmark-after/<lever>/snapshot --only @tests/fixtures/regression-set.json
+npm run replay -- --packets tests/fixtures/seasons/season-packets \
+  --out ../.scratch/benchmark-after/<lever>/seasons --only @tests/fixtures/regression-set.json
+```
+
+`replay-weekly-reads.test.ts` checks the file's shape and dry-runs it over both roots.
+
 ## Full athlete export (local only)
 
 Keep real Tempo downloads under gitignored `.scratch/` (see repo root `.gitignore`). Example:

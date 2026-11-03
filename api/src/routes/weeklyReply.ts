@@ -9,10 +9,8 @@ import {
   LlmTransportError,
   type LlmPort,
   resolveWeeklyPlanWeek,
-  validateWeeklyReply,
+  checkWeeklyReply,
 } from "../llm/index.js";
-import { askOnceMore } from "../llm/askOnceMore.js";
-import { resolveCoachModel } from "../llm/coachModel.js";
 import { recordRouteRejection, type LlmCallRecorder } from "../llmCallLog/index.js";
 import { requireDisclaimer } from "../middleware/requireDisclaimer.js";
 import {
@@ -39,6 +37,7 @@ import {
 } from "../tempo/port.js";
 import { savePrescribedWeek } from "../prescribed/store.js";
 import { getWeekRecapBySessionId } from "../recap/recapStore.js";
+import { coachNotConfiguredBody } from "../settings/coachSetup.js";
 import { createCoachMessage } from "../thread/store.js";
 import { nextIsoWeekBounds } from "../clock/isoWeek.js";
 import { trackReplyRun } from "../replyRun/inflight.js";
@@ -276,32 +275,26 @@ export function createReplyRunner(options: WeeklyReplyRouteOptions): ReplyRunner
       await rememberLastOutboundPacket(packet);
     }
 
-    let callId = randomUUID();
+    const callId = randomUUID();
     try {
-      // A reply refused for its shape is asked for once more before the athlete
-      // sees a failed read. Each attempt keeps its own call log row.
-      const weekStartMonday = resolveWeeklyPlanWeek(packet).weekStartMonday;
-      // One model and effort for the whole run, so a retry never switches model.
-      const coachModel = await resolveCoachModel();
-      const checked = await askOnceMore(async (attempt) => {
-        if (attempt > 1) callId = randomUUID();
-        const reply = await llmPort.generateWeeklyReply(packet, {
-          callId,
-          weekSessionId: focusSession.id,
-          coachModel,
-        });
-        const validated = validateWeeklyReply(reply, weekStartMonday);
-        if (!validated.ok) {
-          await recordRouteRejection(llmCallRecorder, {
-            parentCallId: callId,
-            operation: "weekly_reply",
-            weekSessionId: focusSession.id,
-            errorMessage: validated.error,
-          });
-        }
-        return validated;
+      // The adapter asks once more for a reply refused for its shape (the plan's
+      // dates included), on one target (ADR 0002, ADR 0004); callId names the
+      // attempt that came back. This is the final check, for any port.
+      const reply = await llmPort.generateWeeklyReply(packet, {
+        callId,
+        weekSessionId: focusSession.id,
       });
+      const checked = checkWeeklyReply(
+        reply,
+        resolveWeeklyPlanWeek(packet).weekStartMonday,
+      );
       if (!checked.ok) {
+        await recordRouteRejection(llmCallRecorder, {
+          parentCallId: callId,
+          operation: "weekly_reply",
+          weekSessionId: focusSession.id,
+          errorMessage: checked.error,
+        });
         return {
           status: 502,
           body: {
@@ -389,7 +382,7 @@ export function createReplyRunner(options: WeeklyReplyRouteOptions): ReplyRunner
       };
     } catch (err) {
       if (err instanceof LlmNotConfiguredError) {
-        return { status: 400, body: { error: err.code, message: err.message }, callId };
+        return { status: 400, body: await coachNotConfiguredBody(), callId };
       }
       if (err instanceof LlmHttpError) {
         return {

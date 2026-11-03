@@ -120,6 +120,10 @@ export type PrescribedDay = {
   run?: PrescribedRun | null;
   strength?: string | null;
   notes?: string | null;
+  /** Coach Cade's sentence for the day, as written; null when none was given. */
+  line?: string | null;
+  /** False when Cadence could not derive the day's structure; absent reads as parsed. */
+  parsed?: boolean;
 };
 
 export type PrescribedWeek = {
@@ -227,6 +231,12 @@ export type PrivacyCopy = {
   sent: { heading: string; items: string[] };
   local: { heading: string; items: string[] };
   disclosure: string;
+  /** Who coaching context is sent to. */
+  provider: "anthropic" | "self_hosted";
+  /** The self-hosted model server's host; null for Anthropic. */
+  host: string | null;
+  /** Whether that host is on the athlete's own network; null when there is no host. */
+  onNetwork: boolean | null;
 };
 
 export type OnboardingFieldKey =
@@ -466,21 +476,37 @@ export type CoachEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type CoachModelChoice = { model: string; effort: CoachEffort };
 
+/** Who serves Coach Cade: Anthropic, or the athlete's own model server. */
+export type CoachProvider = "anthropic" | "self_hosted";
+
 /** Coach Cade's model setting: the choice, what is in force, and what can be chosen. */
 export type CoachModelSettings = {
+  /** The provider this view lists; missing (an older API) means Anthropic. */
+  provider?: CoachProvider;
   saved: CoachModelChoice | null;
   effective: CoachModelChoice;
   tested: CoachModelChoice;
   models: Array<{ id: string; displayName: string; tested: boolean; efforts: CoachEffort[] }>;
-  /** Why only a short list is offered: no key saved, or the list couldn't be loaded. */
-  fallback: "no_key" | "unavailable" | null;
+  /**
+   * Why only a short list is offered: no Anthropic key saved, no self-hosted server
+   * saved, or the list couldn't be loaded.
+   */
+  fallback: "no_key" | "no_connection" | "unavailable" | null;
 };
 
-export async function fetchCoachModel(): Promise<CoachModelSettings> {
-  return readJson(await fetch("/api/settings/coach-model"));
+/**
+ * The saved provider's view, or with `provider` that provider's list, so the page can
+ * show a self-hosted server's models before a self-hosted model is saved.
+ */
+export async function fetchCoachModel(provider?: CoachProvider): Promise<CoachModelSettings> {
+  const qs = provider ? `?provider=${provider}` : "";
+  return readJson(await fetch(`/api/settings/coach-model${qs}`));
 }
 
-export async function saveCoachModel(choice: CoachModelChoice): Promise<CoachModelSettings> {
+/** An omitted provider is Anthropic. */
+export async function saveCoachModel(
+  choice: CoachModelChoice & { provider?: CoachProvider },
+): Promise<CoachModelSettings> {
   return readJson(
     await fetch("/api/settings/coach-model", {
       method: "PUT",
@@ -492,6 +518,68 @@ export async function saveCoachModel(choice: CoachModelChoice): Promise<CoachMod
 
 export async function resetCoachModel(): Promise<CoachModelSettings> {
   return readJson(await fetch("/api/settings/coach-model", { method: "DELETE" }));
+}
+
+/** The athlete's own model server: its address, and whether a key is saved. */
+export type SelfHostedConnection = {
+  configured: boolean;
+  baseUrl: string | null;
+  keyConfigured: boolean;
+  maskedKey: string | null;
+  updatedAt: string | null;
+};
+
+export async function fetchSelfHostedConnection(): Promise<SelfHostedConnection> {
+  return readJson(await fetch("/api/settings/self-hosted"));
+}
+
+/** An omitted key keeps the saved one; an empty string removes it. */
+export async function putSelfHostedConnection(body: {
+  baseUrl: string;
+  apiKey?: string;
+}): Promise<SelfHostedConnection> {
+  return readJson(
+    await fetch("/api/settings/self-hosted", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export async function deleteSelfHostedConnection(): Promise<SelfHostedConnection> {
+  return readJson(await fetch("/api/settings/self-hosted", { method: "DELETE" }));
+}
+
+/** Why the saved server's model list couldn't be read. */
+export type SelfHostedListingFailure = "unreachable" | "unauthorized" | "http_error";
+
+/**
+ * Test connection: the saved server's list is read, then a long test message goes to the
+ * chosen model. `verdict` is set only when that message got an answer; a failed listing
+ * leaves the probe `not_run`.
+ */
+export type SelfHostedTestResult = {
+  listing: { ok: boolean; reason?: SelfHostedListingFailure };
+  probe: {
+    ok: boolean;
+    verdict?: "ok" | "cut";
+    sentTokens: number;
+    reportedTokens: number | null;
+    wordFound: boolean;
+    reason?: SelfHostedListingFailure | "timeout" | "invalid_response" | "not_run";
+  };
+};
+
+/** Only ever calls the saved server; can take a minute or two on home hardware. */
+export async function testSelfHostedConnection(model: string): Promise<SelfHostedTestResult> {
+  return readJson(
+    await fetch("/api/settings/self-hosted/test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model }),
+    }),
+  );
 }
 
 export async function fetchThread(
@@ -513,6 +601,24 @@ export async function fetchPrescribedWeek(
 }> {
   return readJson(
     await fetch(`/api/weeks/${encodeURIComponent(weekSessionId)}/prescribed`),
+  );
+}
+
+/**
+ * "Add the details": asks Coach Cade for one line for an unread day of the
+ * week's plan, on the model saved now. Resolves with the plan with that day
+ * filled in; throws when Coach Cade could not fill it in (nothing changed).
+ */
+export async function postPlanDayDetails(
+  weekSessionId: string,
+  date: string,
+): Promise<{ prescribed: PrescribedWeekRecord; day: PrescribedDay }> {
+  return readJson(
+    await fetch(`/api/weeks/${encodeURIComponent(weekSessionId)}/prescribed/details`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ date }),
+    }),
   );
 }
 
@@ -715,7 +821,7 @@ export async function saveOnboardingAnswers(
   coachMessage: ThreadMessage;
   llm: {
     mode: "stub" | "anthropic";
-    anthropicConfigured: boolean;
+    coachConfigured: boolean;
     systemStance: "coach_running_no_diagnose";
   };
 }> {
@@ -922,7 +1028,9 @@ export type HomeDayState =
   | "upcoming"
   | "rest"
   | "missed"
-  | "unknown";
+  | "unknown"
+  /** Coach Cade wrote the day but Cadence could not read it, or the plan left the date out. */
+  | "not_filed";
 
 export type HomeWeekDay = {
   date: string;
@@ -933,6 +1041,10 @@ export type HomeWeekDay = {
   actualDistanceM: number | null;
   state: HomeDayState;
   isToday: boolean;
+  /** False when Cadence has no structure for the day; absent reads as parsed. */
+  parsed?: boolean;
+  /** On a day Cadence could not read, Coach Cade's line; null when the plan gave none. */
+  line?: string | null;
 };
 
 export type HomeRead = {

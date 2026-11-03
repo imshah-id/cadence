@@ -3,7 +3,9 @@ export type LlmCallOperation =
   | "mid_week_chat"
   | "dossier_v1"
   | "dossier_correction"
-  | "dossier_audit";
+  | "dossier_audit"
+  /** "Add the details": one unread plan day filled in (plan-as-text ticket 09). */
+  | "plan_day_fix";
 
 export type LlmCallOutcome =
   | "ok"
@@ -19,7 +21,9 @@ export type LlmCallRecord = {
   /** Caller-chosen call id (routes generate it before calling the port). */
   id: string;
   operation: LlmCallOperation;
-  provider: "anthropic" | "stub";
+  provider: "anthropic" | "self_hosted" | "stub";
+  /** Hostname of the self-hosted base URL; null for Anthropic and stub rows. */
+  serverHost: string | null;
   model: string | null;
   appVersion: string;
   weekSessionId: string | null;

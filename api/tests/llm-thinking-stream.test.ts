@@ -4,7 +4,10 @@ import { FixedClock } from "../src/clock/clock.js";
 import { SecretProtector } from "../src/crypto/secretProtector.js";
 import {
   buildStubMidWeekChatReply,
+  buildStubMidWeekForm,
+  buildStubWeeklyForm,
   buildStubWeeklyReply,
+  anthropicCoachTarget,
   createAnthropicLlmPort,
   LlmHttpError,
   LlmSchemaError,
@@ -12,7 +15,7 @@ import {
   parseAnthropicEffort,
   resolveAnthropicTimeoutMs,
   TESTED_COACH_MODEL,
-  type CoachModel,
+  type CoachTarget,
   type LlmPort,
 } from "../src/llm/index.js";
 import { migrate } from "../src/migrate.js";
@@ -73,8 +76,10 @@ type Flow = {
   name: string;
   tool: string;
   operation: string;
-  call: (port: LlmPort, callId: string, coachModel?: CoachModel) => Promise<unknown>;
+  call: (port: LlmPort, callId: string, coachTarget?: CoachTarget) => Promise<unknown>;
   okInput: () => unknown;
+  /** What the port hands back for okInput: the weekly form is read into the stored shape. */
+  okReply: () => unknown;
 };
 
 const FLOWS: Flow[] = [
@@ -82,17 +87,19 @@ const FLOWS: Flow[] = [
     name: "weekly reply",
     tool: WEEKLY_TOOL,
     operation: "weekly_reply",
-    call: (port, callId, coachModel) =>
-      port.generateWeeklyReply(samplePacket(), { callId, coachModel }),
-    okInput: () => buildStubWeeklyReply(samplePacket()),
+    call: (port, callId, coachTarget) =>
+      port.generateWeeklyReply(samplePacket(), { callId, coachTarget }),
+    okInput: () => buildStubWeeklyForm(samplePacket()),
+    okReply: () => buildStubWeeklyReply(samplePacket()),
   },
   {
     name: "mid-week chat",
     tool: MIDWEEK_TOOL,
     operation: "mid_week_chat",
-    call: (port, callId, coachModel) =>
-      port.generateMidWeekChatReply(samplePacket(), { callId, coachModel }),
-    okInput: () => buildStubMidWeekChatReply(samplePacket()),
+    call: (port, callId, coachTarget) =>
+      port.generateMidWeekChatReply(samplePacket(), { callId, coachTarget }),
+    okInput: () => buildStubMidWeekForm(samplePacket()),
+    okReply: () => buildStubMidWeekChatReply(samplePacket()),
   },
 ];
 
@@ -163,7 +170,7 @@ describe("effort levels / timeout resolution", () => {
 
 for (const flow of FLOWS) {
   describe(`thinking + streaming adapter: ${flow.name}`, () => {
-    it("sends adaptive thinking, effort, auto tool choice, max_tokens 64000 and stream", async () => {
+    it("sends adaptive thinking, effort, auto tool choice, max_tokens 20000 and stream", async () => {
       const { recorder, rows } = memoryRecorder();
       const fetchImpl = fetchReturning(() =>
         anthropicStreamResponse(anthropicToolMessage(flow.tool, flow.okInput())),
@@ -181,7 +188,7 @@ for (const flow of FLOWS) {
       expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
       expect(body.output_config).toEqual({ effort: "high" });
       expect(body.tool_choice).toEqual({ type: "auto" });
-      expect(body.max_tokens).toBe(64000);
+      expect(body.max_tokens).toBe(20000);
       expect(body.stream).toBe(true);
       expect(body).not.toHaveProperty("temperature");
       expect(body).not.toHaveProperty("budget_tokens");
@@ -231,10 +238,11 @@ for (const flow of FLOWS) {
         anthropicStreamResponse(anthropicToolMessage(flow.tool, flow.okInput())),
       );
       const readCoachModel = vi.fn(async () => TESTED_COACH_MODEL);
-      await flow.call(portWith(fetchImpl, recorder, { readCoachModel }), "call-h", {
-        model: "claude-opus-5-5",
-        effort: "medium",
-      });
+      await flow.call(
+        portWith(fetchImpl, recorder, { readCoachModel }),
+        "call-h",
+        anthropicCoachTarget({ model: "claude-opus-5-5", effort: "medium" }, API_KEY),
+      );
       const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
         .calls[0]![1] as RequestInit;
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
@@ -264,7 +272,7 @@ for (const flow of FLOWS) {
       const { recorder, rows } = memoryRecorder();
       const fetchImpl = fetchReturning(() => anthropicStreamResponse(message));
       const reply = await flow.call(portWith(fetchImpl, recorder), "call-2");
-      expect(reply).toEqual(input);
+      expect(reply).toEqual(flow.okReply());
 
       expect(rows).toHaveLength(1);
       const row = rows[0]!;
@@ -322,7 +330,10 @@ for (const flow of FLOWS) {
       await expect(
         flow.call(portWith(fetchImpl, recorder), "call-4"),
       ).rejects.toBeInstanceOf(LlmSchemaError);
-      expect(rows).toHaveLength(1);
+      // Refused for its shape, so asked for once more (ADR 0002): two rows, the
+      // second written under the caller's id and linked to the first.
+      expect(rows).toHaveLength(2);
+      expect(rows[1]).toMatchObject({ id: "call-4", parentCallId: rows[0]!.id });
       expect(rows[0]).toMatchObject({
         outcome: "schema_invalid",
         stopReason: "end_turn",
@@ -344,7 +355,8 @@ for (const flow of FLOWS) {
       await expect(
         flow.call(portWith(fetchImpl, recorder), "call-5"),
       ).rejects.toBeInstanceOf(LlmSchemaError);
-      expect(rows).toHaveLength(1);
+      // Asked for once more, like any reply refused for its shape (ADR 0002).
+      expect(rows).toHaveLength(2);
       expect(rows[0]).toMatchObject({
         outcome: "schema_invalid",
         stopReason: "refusal",
@@ -598,7 +610,7 @@ describe("thinking_tokens in the LLM call log (Postgres + routes)", () => {
   it("stores and exposes thinking_tokens for the weekly reply", async () => {
     const fetchImpl = vi.fn(async () =>
       anthropicStreamResponse(
-        thinkingMessage(WEEKLY_TOOL, buildStubWeeklyReply(samplePacket())),
+        thinkingMessage(WEEKLY_TOOL, buildStubWeeklyForm(samplePacket())),
       ),
     ) as unknown as typeof globalThis.fetch;
     const { app, weekSessionId } = await liveApp(fetchImpl);
